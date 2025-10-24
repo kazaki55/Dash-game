@@ -2,540 +2,521 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Dungeon Drift — Roguelike (Standalone)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Rogue Drift — Joystick Roguelike</title>
 <style>
-  :root{ --bg:#071126; --panel:#081827; --text:#e6eef8; --muted:#9fb0c8; --accent:#60a5fa; }
-  html,body{ height:100%; margin:0; font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial; background:linear-gradient(180deg,#041024 0%, #071126 100%); color:var(--text); -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;}
-  .wrap{ max-width:980px; margin:18px auto; padding:14px; }
-  header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;}
-  h1{ margin:0; font-size:20px; letter-spacing:0.2px; }
-  .controls{ display:flex; gap:8px; align-items:center; }
-  button{ background:var(--panel); color:var(--text); border:1px solid rgba(255,255,255,0.04); padding:8px 10px; border-radius:10px; cursor:pointer;}
-  button.small{ padding:6px 8px; font-size:13px; }
-  .board-wrap{ background:rgba(255,255,255,0.02); padding:10px; border-radius:12px; display:flex; gap:12px; align-items:flex-start; }
-  canvas{ image-rendering:pixelated; display:block; border-radius:6px; background:#001; }
-  .sidebar{ width:320px; min-width:220px; color:var(--muted); font-size:13px; }
-  .hud { margin-bottom:10px; }
-  .msg{ font-size:13px; color:var(--text); min-height:78px; background:rgba(255,255,255,0.01); padding:10px; border-radius:8px; margin-bottom:10px; overflow:auto; }
+  :root{ --bg:#071022; --panel:#0b1626; --accent:#60a5fa; --muted:#9fb0c8; --good:#a3e635; --danger:#fb7185; }
+  html,body{ height:100%; margin:0; background:linear-gradient(180deg,#03061a 0%, #071022 100%); color:#e6eef8; font-family:Inter,system-ui,Segoe UI,Roboto,Arial; -webkit-text-size-adjust:100%;}
+  .wrap{ max-width:980px; margin:8px auto; padding:10px; box-sizing:border-box;}
+  header{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px; }
+  h1{ margin:0; font-size:18px; }
+  .row{ display:flex; gap:10px; align-items:center; }
+  button{ background:var(--panel); color:inherit; border:1px solid rgba(255,255,255,0.03); padding:8px 10px; border-radius:10px; cursor:pointer; }
+  button.strong{ background:linear-gradient(90deg,var(--accent),#3b82f6); color:#001; font-weight:600; }
+  .game-area{ display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+  canvas{ background:#001; border-radius:10px; display:block; touch-action:none; }
+  .sidebar{ width:300px; min-width:220px; color:var(--muted); font-size:13px; }
+  .hud{ background:rgba(255,255,255,0.02); padding:8px; border-radius:8px; margin-bottom:8px; }
+  .msg{ background:rgba(255,255,255,0.01); padding:8px; border-radius:8px; min-height:64px; color:#cfe6ff; white-space:pre-line; overflow:auto; }
+  .center { text-align:center; }
+  .overlay{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:60; }
+  .panel{ background:linear-gradient(180deg,#071a2a,#042033); border-radius:12px; padding:16px; width:90%; max-width:560px; color:var(--text); }
+  .options{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:12px; }
+  .opt{ background:rgba(255,255,255,0.02); border-radius:8px; padding:10px; min-width:150px; cursor:pointer; border:1px solid rgba(255,255,255,0.03); }
+  .opt:hover{ transform:translateY(-4px); transition:all .12s; box-shadow:0 6px 20px rgba(0,0,0,0.5); }
   .small{ font-size:12px; color:var(--muted); }
-  .dead{ margin-top:8px; padding:10px; background:rgba(255,0,0,0.06); border-radius:8px; color:#ffd6d6; }
-  footer{ margin-top:12px; color:var(--muted); font-size:12px; text-align:center; }
-  @media (max-width:820px){ .wrap{ padding:8px; } .board-wrap{flex-direction:column; align-items:center;} .sidebar{ width:100%; } }
+  .controls-hint{ margin-top:8px; color:var(--muted); font-size:12px; }
+  .joystick{ position:fixed; left:18px; bottom:18px; width:140px; height:140px; pointer-events:none; z-index:50; }
+  .stick-base{ width:100%; height:100%; border-radius:50%; background:rgba(255,255,255,0.03); display:flex; align-items:center; justify-content:center; pointer-events:auto; touch-action:none; }
+  .stick-knob{ width:56px; height:56px; border-radius:50%; background:linear-gradient(180deg,#7dd3fc,#60a5fa); box-shadow:0 8px 18px rgba(6,8,24,0.6); transform:translate(0,0); }
+  @media (max-width:860px){ .sidebar{ width:100%; order:2; } .game-area{ flex-direction:column; align-items:center; } canvas{ max-width:100%; height:auto; } .joystick{ left:12px; bottom:12px; width:120px; height:120px; } }
 </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1>Dungeon Drift — Roguelike</h1>
-      <div class="controls">
-        <button id="newSeed" class="small" title="Regenerate with new seed">New Seed</button>
-        <button id="restart" class="small" title="Restart run">Restart</button>
-        <button id="download" class="small" title="Download map as PNG">Save Map</button>
+      <h1>Rogue Drift — Joystick Roguelike</h1>
+      <div class="row">
+        <div class="small" id="scoreLabel">Score: 0</div>
+        <div style="width:8px"></div>
+        <button id="restartBtn">Restart</button>
       </div>
     </header>
 
-    <div class="board-wrap">
-      <div>
-        <canvas id="gameCanvas"></canvas>
-      </div>
+    <div class="game-area">
+      <canvas id="game" width="640" height="480"></canvas>
 
       <div class="sidebar">
         <div class="hud">
-          <div><strong id="depthLabel">Depth: 1</strong></div>
-          <div class="small" id="statsLabel">HP: 10/10 • ATK: 3 • DEF: 0 • LVL: 1 XP: 0</div>
-          <div style="height:6px"></div>
-        </div>
-
-        <div class="msg" id="messages" aria-live="polite"></div>
-
-        <div class="small" style="margin-top:10px">
-          Controls: Arrow keys or WASD to move. G pick up items on tile. I inspect nearby items. R restart.  
-          Descend stairs to go deeper. Permadeath is on.
-        </div>
-
-        <div id="deadPanel" style="display:none" class="dead">
-          <div><strong>You died</strong></div>
-          <div id="deadInfo"></div>
+          <div><strong id="hpLabel">HP: 10 / 10</strong></div>
+          <div class="small" id="statLabel">ATK: 1 • FR: 1.0/s • SPD: 120</div>
           <div style="height:8px"></div>
-          <button id="tryAgain">Try Again</button>
+          <div class="small">Level <span id="lvlLabel">1</span> • XP <span id="xpLabel">0</span>/<span id="xpNext">10</span></div>
         </div>
+
+        <div class="msg" id="logArea">Move by the left joystick. Your hero auto-shoots nearest enemies. Kill enemies to drop XP orbs. Level up to choose one of 3 random upgrades.</div>
+
+        <div style="height:8px"></div>
+        <div class="small">Controls: Left joystick to move (touch & drag). On desktop: click and drag inside the joystick area or use WASD / arrow keys. Tap canvas to dash (short burst).</div>
+
+        <div style="height:10px"></div>
+        <div class="small center">Best Score (kept locally)</div>
+        <div class="center" style="font-weight:700; margin-top:6px" id="bestLabel">0</div>
       </div>
     </div>
+  </div>
 
-    <footer>Built for instant use — save this file and open it in your browser to play.</footer>
+  <!-- Joystick UI (touch) -->
+  <div class="joystick" id="joystick">
+    <div class="stick-base" id="stickBase" aria-hidden="true">
+      <div class="stick-knob" id="stickKnob"></div>
+    </div>
+  </div>
+
+  <!-- Level-up overlay -->
+  <div id="levelOverlay" class="overlay" style="display:none">
+    <div class="panel">
+      <div style="font-size:18px; font-weight:700">Level Up!</div>
+      <div class="small" style="margin-top:6px">Choose one power</div>
+      <div class="options" id="options"></div>
+      <div class="controls-hint center small" style="margin-top:10px">Tap an option to select it and continue.</div>
+    </div>
   </div>
 
 <script>
-/* Dungeon Drift — standalone HTML+JS roguelike
-   - Procedural dungeon (rooms + tunnels)
-   - Turn-based movement
-   - Enemies chase player, items, stairs
-   - XP, leveling, permadeath
+/* Rogue Drift — single-file joystick roguelike
+   - Mobile joystick (left) for movement
+   - Auto-shoot nearest enemy
+   - Enemies drop XP orbs; level up => choose 1 of 3 random upgrades
+   - Save best score to localStorage
 */
 
-/* ----- Utilities ----- */
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return function() {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ t >>> 15, 1 | t);
-    r ^= r + Math.imul(r ^ r >>> 7, 61 | r);
-    return ((r ^ r >>> 14) >>> 0) / 4294967296;
-  };
-}
-function randInt(rng, a, b){ return a + Math.floor(rng() * (b - a + 1)); }
-
-/* ----- Game state ----- */
-const canvas = document.getElementById('gameCanvas');
+// Canvas and resize
+const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+let W = canvas.width, H = canvas.height;
 
+function fitCanvas() {
+  const vw = Math.min(window.innerWidth - 16, 900);
+  const vh = Math.min(window.innerHeight - 120, 700);
+  // keep aspect ~ 4:3
+  const ratio = 4/3;
+  let cw = vw, ch = Math.floor(cw / ratio);
+  if (ch > vh) { ch = vh; cw = Math.floor(ch * ratio); }
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  // drawing buffer stays fixed for pixel-logic
+  W = canvas.width; H = canvas.height;
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+// Game state
 let state = null;
-let seed = Math.floor(Math.random()*1e9);
-let rng = mulberry32(seed);
-let tile = 18;                // pixel size per tile (will scale to fit)
-let viewPadding = 0;
-let bestDepth = Number(localStorage.getItem('dd_best') || 1);
+const savedBest = Number(localStorage.getItem('rd_best') || 0);
+document.getElementById('bestLabel').innerText = savedBest;
 
-const messagesEl = document.getElementById('messages');
-const depthLabel = document.getElementById('depthLabel');
-const statsLabel = document.getElementById('statsLabel');
-const deadPanel = document.getElementById('deadPanel');
-const deadInfo = document.getElementById('deadInfo');
+function rand(min, max){ return Math.random()*(max-min)+min; }
+function irand(min,max){ return Math.floor(rand(min,max+1)); }
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 
-function pushMsg(text){
-  const s = state;
-  if (!s) return;
-  s.messages.push(text);
-  if (s.messages.length > 12) s.messages.shift();
-  messagesEl.innerText = s.messages.slice(-8).join('\\n');
+function createNewRun(){
+  state = {
+    player: { x: W/2, y: H/2, r: 12, hp: 10, maxHp:10, atk:1, fireRate:1.0, fireTimer:0, speed:120, score:0 },
+    bullets: [], enemies: [], orbs: [], particles: [],
+    spawnerTimer: 0.6, spawnRate: 0.6, difficulty: 1,
+    level:1, xp:0, xpNext:10,
+    best: savedBest,
+    paused:false, gameOver:false,
+    upgrades: { dmg:0, fire:0, speed:0, pierce:0, spread:0, hp:0 }
+  };
+  state.player.x = W/2; state.player.y = H/2;
+  // initial enemies
+  for (let i=0;i<4;i++) spawnEnemy();
+  log('New run — survive as long as you can. Kill enemies to get XP orbs.');
+  updateHUD();
+}
+createNewRun();
+
+// Logging
+const logArea = document.getElementById('logArea');
+function log(s){ logArea.innerText = s + '\\n' + logArea.innerText; }
+
+// Joystick
+const stickBase = document.getElementById('stickBase');
+const stickKnob = document.getElementById('stickKnob');
+let joy = { active:false, cx:0, cy:0, x:0, y:0, nx:0, ny:0, max:44 };
+function initJoystick(){
+  const jb = document.getElementById('joystick');
+  // place around bottom-left; base is pointer-events enabled
+  const baseRect = stickBase.getBoundingClientRect();
+  // use touch events
+  stickBase.addEventListener('touchstart', (e)=>{ e.preventDefault(); joy.active=true; const t=e.touches[0]; const r=stickBase.getBoundingClientRect(); joy.cx=r.left+r.width/2; joy.cy=r.top+r.height/2; updateJoyFromTouch(t); }, {passive:false});
+  stickBase.addEventListener('touchmove', (e)=>{ e.preventDefault(); if(!joy.active) return; updateJoyFromTouch(e.touches[0]); }, {passive:false});
+  stickBase.addEventListener('touchend', (e)=>{ joy.active=false; joy.nx=0; joy.ny=0; stickKnob.style.transform = 'translate(0px,0px)'; }, {passive:false});
+
+  // mouse support for desktop in joystick area
+  let mouseDown=false;
+  stickBase.addEventListener('mousedown',(e)=>{ e.preventDefault(); mouseDown=true; joy.active=true; const r=stickBase.getBoundingClientRect(); joy.cx=r.left+r.width/2; joy.cy=r.top+r.height/2; updateJoyFromTouch(e); });
+  window.addEventListener('mousemove',(e)=>{ if(!mouseDown) return; updateJoyFromTouch(e); });
+  window.addEventListener('mouseup',(e)=>{ mouseDown=false; joy.active=false; joy.nx=0; joy.ny=0; stickKnob.style.transform='translate(0px,0px)'; });
+}
+function updateJoyFromTouch(t){
+  const tx = (t.clientX || t.pageX), ty = (t.clientY || t.pageY);
+  const dx = tx - joy.cx, dy = ty - joy.cy;
+  const d = Math.hypot(dx,dy);
+  const max = joy.max;
+  const ndx = (d>max ? dx*(max/d) : dx);
+  const ndy = (d>max ? dy*(max/d) : dy);
+  stickKnob.style.transform = `translate(${ndx}px, ${ndy}px)`;
+  joy.nx = clamp(dx / max, -1, 1);
+  joy.ny = clamp(dy / max, -1, 1);
 }
 
-/* ----- Map generation ----- */
-function generateMap(w = 45, h = 31){
-  const map = new Array(h).fill(0).map(()=>new Array(w).fill('#'));
-  const rooms = [];
-  const rngLocal = rng;
+// Desktop keyboard fallback (WASD / arrows)
+const keys = {};
+window.addEventListener('keydown',(e)=>{ keys[e.code]=true; if(e.code==='KeyR') restart(); if(e.code==='Space') dash(); });
+window.addEventListener('keyup',(e)=>{ keys[e.code]=false; });
 
-  // Carve rectangular rooms
-  const roomCount = 6 + Math.floor(rngLocal()*6);
-  for (let i=0;i<roomCount;i++){
-    const rw = 4 + Math.floor(rngLocal()*8);
-    const rh = 3 + Math.floor(rngLocal()*6);
-    const rx = 2 + Math.floor(rngLocal()*(w-rw-4));
-    const ry = 2 + Math.floor(rngLocal()*(h-rh-4));
-    for (let yy=ry; yy<ry+rh; yy++) for (let xx=rx; xx<rx+rw; xx++) map[yy][xx] = '.';
-    rooms.push({x:rx, y:ry, w:rw, h:rh});
+// Dash on tap canvas
+canvas.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){ dash(); } }, {passive:true});
+canvas.addEventListener('mousedown',(e)=>{ dash(); });
+
+// Player dash
+let dashTimer = 0;
+function dash(){ if (dashTimer>0) return; dashTimer = 0.28; state.player.x += 0; /* will use velocity later */ }
+
+// Spawn enemies
+function spawnEnemy(){
+  const side = Math.random();
+  let x,y;
+  if (side < 0.25){ x = -20; y = Math.random()*H; }
+  else if (side < 0.5){ x = W+20; y = Math.random()*H; }
+  else if (side < 0.75){ x = Math.random()*W; y = -20; }
+  else { x = Math.random()*W; y = H+20; }
+  const typeRoll = Math.random();
+  let type='basic', hp=1+irand(0,1), speed=40+Math.random()*40, col='#fb7185', score=1;
+  if (typeRoll>0.85){ type='fast'; hp=1; speed=120; col='#fbbf24'; score=2; }
+  if (typeRoll>0.95){ type='brute'; hp=3+irand(0,2); speed=30; col='#ef4444'; score=4; }
+  state.enemies.push({ x,y, vx:0, vy:0, r:10 + (hp-1)*3, hp, maxHp:hp, speed, col, score });
+}
+
+// Shoot bullets automatically at nearest enemy
+function autoShoot(dt){
+  const p = state.player;
+  p.fireTimer -= dt;
+  const effectiveFR = p.fireRate * (1 + (state.upgrades.fire*0.25));
+  if (p.fireTimer > 0) return;
+  // find nearest enemy within range
+  if (state.enemies.length === 0) return;
+  let nearest = null; let nd = 1e9;
+  for (const e of state.enemies){ const d = Math.hypot(e.x-p.x, e.y-p.y); if (d < nd){ nd = d; nearest = e; } }
+  if (!nearest) return;
+  // fire toward nearest
+  p.fireTimer = 1 / effectiveFR;
+  const ang = Math.atan2(nearest.y - p.y, nearest.x - p.x);
+  // primary bullet
+  const dmg = p.atk + state.upgrades.dmg;
+  spawnBullet(p.x + Math.cos(ang)*20, p.y + Math.sin(ang)*20, Math.cos(ang)*420, Math.sin(ang)*420, dmg);
+  // spread
+  const spread = state.upgrades.spread;
+  for (let i=1;i<=spread;i++){
+    const a1 = ang + 0.16*i; spawnBullet(p.x, p.y, Math.cos(a1)*380, Math.sin(a1)*380, dmg);
+    const a2 = ang - 0.16*i; spawnBullet(p.x, p.y, Math.cos(a2)*380, Math.sin(a2)*380, dmg);
+  }
+}
+
+// Bullets
+function spawnBullet(x,y,vx,vy,dmg){
+  state.bullets.push({ x,y,vx,vy,r:4, dmg, pierce: state.upgrades.pierce, life:2.0 });
+}
+
+// Update loop
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.033, (now - last)/1000);
+  last = now;
+  if (!state.gameOver && !state.paused){
+    update(dt);
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Update game state
+function update(dt){
+  // spawn enemies growth with time
+  state.spawnerTimer -= dt;
+  if (state.spawnerTimer <= 0){
+    spawnEnemy();
+    state.spawnerTimer = Math.max(0.18, state.spawnRate * (0.95 - Math.min(0.6, state.difficulty*0.02)));
+    state.difficulty += 0.015;
   }
 
-  // Connect rooms with simple tunnels
-  function carveLine(ax,ay,bx,by){
-    let x=ax, y=ay;
-    while (x!==bx || y!==by){
-      map[y][x] = '.';
-      if (rngLocal() < 0.5) x += Math.sign(bx-x);
-      else y += Math.sign(by-y);
+  // handle joystick / keys for movement
+  let mx=0,my=0;
+  if (joy.active){ mx = joy.nx; my = joy.ny; }
+  else {
+    if (keys['ArrowUp'] || keys['KeyW']) my = -1;
+    if (keys['ArrowDown'] || keys['KeyS']) my = 1;
+    if (keys['ArrowLeft'] || keys['KeyA']) mx = -1;
+    if (keys['ArrowRight'] || keys['KeyD']) mx = 1;
+  }
+  const len = Math.hypot(mx,my) || 1;
+  const spd = state.player.speed * (1 + state.upgrades.speed*0.12);
+  state.player.x += (mx/len) * spd * dt;
+  state.player.y += (my/len) * spd * dt;
+  // clamp
+  state.player.x = clamp(state.player.x, 20, W-20);
+  state.player.y = clamp(state.player.y, 20, H-20);
+
+  // dash effect
+  if (dashTimer > 0){ dashTimer -= dt; const dashBoost = 250 * dt; state.player.x += Math.cos(0)*dashBoost; }
+
+  // update bullets
+  for (let i=state.bullets.length-1;i>=0;i--){
+    const b = state.bullets[i];
+    b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
+    if (b.life <= 0 || b.x < -50 || b.x > W+50 || b.y < -50 || b.y > H+50){ state.bullets.splice(i,1); continue; }
+  }
+
+  // update enemies
+  for (let i=state.enemies.length-1;i>=0;i--){
+    const e = state.enemies[i];
+    // move toward player
+    const dx = state.player.x - e.x; const dy = state.player.y - e.y;
+    const d = Math.hypot(dx,dy) || 1;
+    e.vx = (dx/d) * e.speed;
+    e.vy = (dy/d) * e.speed;
+    e.x += e.vx*dt; e.y += e.vy*dt;
+    // collision with player
+    if (Math.hypot(e.x-state.player.x, e.y-state.player.y) < e.r + state.player.r){
+      state.player.hp -= 1;
+      // knockback a little
+      e.x -= e.vx*dt*2; e.y -= e.vy*dt*2;
+      spawnParticle(state.player.x, state.player.y, 8, '#fb7185');
+      if (state.player.hp <= 0){ gameOver(); return; }
     }
-    map[by][bx] = '.';
-  }
-  for (let i=1;i<rooms.length;i++){
-    const a = rooms[i-1], b = rooms[i];
-    const ax = a.x + Math.floor(a.w/2), ay = a.y + Math.floor(a.h/2);
-    const bx = b.x + Math.floor(b.w/2), by = b.y + Math.floor(b.h/2);
-    carveLine(ax,ay,bx,by);
   }
 
-  // Random tunnels (drunkard walker)
-  let walkers = 700 + Math.floor(rngLocal()*300);
-  let cx = Math.floor(w/2), cy = Math.floor(h/2);
-  while (walkers-- > 0){
-    map[cy][cx] = '.';
-    const d = Math.floor(rngLocal()*4);
-    if (d===0) cx = Math.min(w-2, cx+1);
-    if (d===1) cx = Math.max(1, cx-1);
-    if (d===2) cy = Math.min(h-2, cy+1);
-    if (d===3) cy = Math.max(1, cy-1);
-  }
-
-  // border walls
-  for (let y=0;y<h;y++){ map[y][0]='#'; map[y][w-1]='#'; }
-  for (let x=0;x<w;x++){ map[0][x]='#'; map[h-1][x]='#'; }
-
-  return { map, w, h, rooms };
-}
-
-/* ----- New run / Floor ----- */
-function newRun(){
-  dieCleanup();
-  state = {};
-  rng = mulberry32(seed);
-  const M = generateMap();
-  state.map = M.map;
-  state.w = M.w; state.h = M.h; state.rooms = M.rooms;
-  // place player in first room center
-  const spawn = state.rooms[0];
-  const px = spawn.x + Math.floor(spawn.w/2);
-  const py = spawn.y + Math.floor(spawn.h/2);
-  state.player = { x: px, y: py, hp: 10, maxHp: 10, atk: 3, def: 0, xp: 0, lvl: 1};
-  // enemies
-  state.enemies = [];
-  const enemyCount = 6 + Math.floor(rng()*6);
-  for (let i=0;i<enemyCount;i++){
-    const r = state.rooms[Math.floor(rng()*state.rooms.length)];
-    const ex = r.x + Math.floor(r.w * rng());
-    const ey = r.y + Math.floor(r.h * rng());
-    if (state.map[ey][ex] === '.' && (ex !== px || ey !== py)){
-      state.enemies.push({ x: ex, y: ey, hp: 4 + Math.floor(rng()*4), atk: 2, def: 0 });
-    }
-  }
-  // items
-  state.items = [];
-  const itemTypes = ['potion','sword','leather','ring'];
-  for (let i=0;i<8;i++){
-    const r = state.rooms[Math.floor(rng()*state.rooms.length)];
-    const ix = r.x + Math.floor(r.w * rng());
-    const iy = r.y + Math.floor(r.h * rng());
-    if (state.map[iy][ix] === '.' && (ix !== px || iy !== py)){
-      state.items.push({ x: ix, y: iy, type: itemTypes[Math.floor(rng()*itemTypes.length)] });
-    }
-  }
-  // stairs in last room
-  const lastRoom = state.rooms[state.rooms.length-1];
-  state.stairs = { x: lastRoom.x + Math.floor(lastRoom.w/2), y: lastRoom.y + Math.floor(lastRoom.h/2) };
-  state.messages = [];
-  state.depth = 1;
-  state.turn = 0;
-  pushMsg('Welcome to Dungeon Drift — descend the stairs to go deeper.');
-  resizeCanvas();
-  draw();
-  updateUI();
-}
-
-/* ----- Draw ----- */
-function resizeCanvas(){
-  // scale canvas to preserve tile size and fit available viewport reasonably
-  const maxWidth = Math.min(window.innerWidth - 380, 820);
-  const canvasW = Math.min(maxWidth, state.w * tile);
-  // choose tile size to fit if screen small
-  let scale = 1;
-  if (state.w * tile > canvasW){
-    scale = Math.floor(canvasW / state.w / 1); if (scale < 1) scale = 1;
-  }
-  const usedTile = Math.max(10, Math.floor(tile * scale));
-  canvas.width = state.w * usedTile;
-  canvas.height = state.h * usedTile;
-  canvas.style.width = canvas.width + 'px';
-  canvas.style.height = canvas.height + 'px';
-  canvas._tile = usedTile;
-}
-
-function draw(){
-  if (!state) return;
-  const t = canvas._tile || tile;
-  const map = state.map;
-  ctx.fillStyle = '#071126'; ctx.fillRect(0,0,canvas.width,canvas.height);
-
-  // tiles
-  for (let y=0;y<state.h;y++){
-    for (let x=0;x<state.w;x++){
-      const ch = map[y][x];
-      const px = x * t, py = y * t;
-      if (ch === '#'){
-        ctx.fillStyle = '#253341';
-        ctx.fillRect(px,py,t,t);
-        // subtle stones
-        if ((x+y)%7 === 0){
-          ctx.fillStyle = 'rgba(0,0,0,0.06)';
-          ctx.fillRect(px+2, py+2, 3, 3);
+  // bullets hit enemies
+  for (let bi=state.bullets.length-1; bi>=0; bi--){
+    const b = state.bullets[bi];
+    for (let ei=state.enemies.length-1; ei>=0; ei--){
+      const e = state.enemies[ei];
+      if (Math.hypot(b.x-e.x, b.y-e.y) < b.r + e.r){
+        e.hp -= b.dmg;
+        spawnParticle(b.x, b.y, 6, '#fde68a');
+        if (b.pierce > 0){ b.pierce--; } else { state.bullets.splice(bi,1); }
+        if (e.hp <= 0){
+          // drop orbs
+          const orbCount = 1 + (e.score>1?1:0);
+          for (let o=0;o<orbCount;o++){
+            state.orbs.push({ x:e.x + rand(-6,6), y:e.y + rand(-6,6), r:5, vx: rand(-30,30), vy: rand(-30,30), life: 999 });
+          }
+          state.player.score += e.score;
+          state.enemies.splice(ei,1);
+          spawnParticle(e.x, e.y, 12, e.col);
+          updateScore();
         }
-      } else {
-        ctx.fillStyle = '#071a2b';
-        ctx.fillRect(px,py,t,t);
+        break;
       }
     }
   }
 
-  // items
-  state.items.forEach(it=>{
-    const px = it.x * t, py = it.y * t;
-    if (it.type === 'potion') ctx.fillStyle = '#f97316';
-    else if (it.type === 'sword') ctx.fillStyle = '#94a3b8';
-    else if (it.type === 'leather') ctx.fillStyle = '#f59e0b';
-    else ctx.fillStyle = '#60a5fa';
-    ctx.fillRect(px + t*0.15, py + t*0.15, t*0.7, t*0.7);
-  });
+  // collect orbs
+  for (let oi=state.orbs.length-1; oi>=0; oi--){
+    const o = state.orbs[oi];
+    o.x += o.vx*dt; o.y += o.vy*dt;
+    // attract to player if close
+    const d = Math.hypot(o.x-state.player.x, o.y-state.player.y);
+    if (d < 48){
+      o.vx += (state.player.x - o.x) * 6 * dt;
+      o.vy += (state.player.y - o.y) * 6 * dt;
+    }
+    if (d < state.player.r + o.r){
+      // collect as XP
+      const xpGain = 1 + (Math.random() < 0.08 ? 1 : 0);
+      state.xp += xpGain;
+      state.orbs.splice(oi,1);
+      spawnParticle(state.player.x, state.player.y, 8, '#60a5fa');
+      // check level
+      if (state.xp >= state.xpNext){
+        levelUp();
+      }
+    }
+  }
 
-  // stairs
-  ctx.fillStyle = '#c084fc';
-  ctx.fillRect(state.stairs.x * t + t*0.12, state.stairs.y * t + t*0.12, t*0.76, t*0.76);
+  // particles update
+  for (let i=state.particles.length-1;i>=0;i--){
+    const p = state.particles[i];
+    p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
+    p.vx *= 0.98; p.vy *= 0.98;
+    if (p.life <= 0) state.particles.splice(i,1);
+  }
 
-  // enemies
-  state.enemies.forEach(e=>{
-    const px = e.x * t + t/2, py = e.y * t + t/2;
-    ctx.fillStyle = '#ef4444';
-    ctx.beginPath(); ctx.arc(px,py, Math.max(4, t*0.42), 0, Math.PI*2); ctx.fill();
+  // auto shooting behavior
+  autoShoot(dt);
+
+  // update timers
+  if (state.player.fireTimer > 0) state.player.fireTimer -= dt;
+  if (dashTimer > 0) dashTimer = Math.max(0, dashTimer - dt);
+
+  // update HUD each frame
+  updateHUD();
+}
+
+// Particles spawn
+function spawnParticle(x,y,n,color){
+  for (let i=0;i<n;i++){
+    state.particles.push({ x, y, vx: rand(-120,120), vy: rand(-120,120), life: 0.4 + Math.random()*0.6, c: color });
+  }
+}
+
+// Level up logic: present 3 random upgrades
+const overlay = document.getElementById('levelOverlay');
+const optsEl = document.getElementById('options');
+
+const upgradesPool = [
+  { id:'dmg', title:'+Damage', desc:'Increase attack damage by 1' },
+  { id:'fire', title:'Fire Rate', desc:'Increase firing speed by 20%' },
+  { id:'speed', title:'Movement Speed', desc:'Move faster (+10%)' },
+  { id:'hp', title:'Max HP', desc:'Max HP +2' },
+  { id:'pierce', title:'Piercing Shots', desc:'Bullets pierce one target' },
+  { id:'spread', title:'Spread', desc:'Add 1 extra projectile on shot' },
+  { id:'heal', title:'Heal', desc:'Restore 6 HP now' }
+];
+
+function levelUp(){
+  state.xp -= state.xpNext;
+  state.level++;
+  state.xpNext = Math.floor(state.xpNext * 1.6);
+  // choose 3 random distinct upgrades
+  const pool = [...upgradesPool];
+  const choices = [];
+  while (choices.length < 3 && pool.length){
+    const i = irand(0, pool.length-1);
+    choices.push(pool.splice(i,1)[0]);
+  }
+  // show overlay
+  optsEl.innerHTML = '';
+  choices.forEach(ch => {
+    const div = document.createElement('div');
+    div.className = 'opt';
+    div.innerHTML = `<div style="font-weight:700">${ch.title}</div><div class="small" style="margin-top:6px">${ch.desc}</div>`;
+    div.addEventListener('click', ()=>{
+      applyUpgrade(ch.id);
+      overlay.style.display = 'none';
+      state.paused = false;
+      log('Picked: ' + ch.title);
+    });
+    optsEl.appendChild(div);
   });
+  state.paused = true;
+  overlay.style.display = 'flex';
+}
+
+// Apply upgrade
+function applyUpgrade(id){
+  if (id === 'dmg'){ state.upgrades.dmg++; }
+  if (id === 'fire'){ state.upgrades.fire++; state.player.fireRate *= 1.2; } // increase rate multiplier
+  if (id === 'speed'){ state.upgrades.speed++; state.player.speed = Math.floor(state.player.speed * 1.12); }
+  if (id === 'hp'){ state.upgrades.hp++; state.player.maxHp += 2; state.player.hp += 2; }
+  if (id === 'pierce'){ state.upgrades.pierce++; }
+  if (id === 'spread'){ state.upgrades.spread++; }
+  if (id === 'heal'){ state.player.hp = Math.min(state.player.maxHp, state.player.hp + 6); }
+  // small reward
+  state.player.score += 5;
+  updateHUD();
+  updateScore();
+}
+
+// HUD update
+function updateHUD(){
+  document.getElementById('hpLabel').innerText = `HP: ${state.player.hp} / ${state.player.maxHp}`;
+  document.getElementById('statLabel').innerText = `ATK: ${state.player.atk + state.upgrades.dmg} • FR: ${(state.player.fireRate*(1+state.upgrades.fire*0.25)).toFixed(2)}/s • SPD: ${state.player.speed}`;
+  document.getElementById('lvlLabel').innerText = state.level;
+  document.getElementById('xpLabel').innerText = state.xp;
+  document.getElementById('xpNext').innerText = state.xpNext;
+  document.getElementById('scoreLabel').innerText = `Score: ${state.player.score}`;
+}
+
+// Score update & best
+function updateScore(){
+  if (state.player.score > state.best){
+    state.best = state.player.score;
+    localStorage.setItem('rd_best', state.best);
+    document.getElementById('bestLabel').innerText = state.best;
+  }
+}
+
+// Game over
+function gameOver(){
+  state.gameOver = true;
+  state.paused = true;
+  log('You died. Score: ' + state.player.score);
+  // show overlay simple
+  setTimeout(()=> {
+    const again = confirm('You died — score: ' + state.player.score + '\\nPlay again?');
+    if (again){ restart(); }
+  }, 200);
+}
+
+// Render draw
+function render(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+  // background
+  const g = ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#001122'); g.addColorStop(1,'#001010');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // draw orbs
+  for (const o of state.orbs){
+    ctx.beginPath(); ctx.fillStyle = '#60a5fa'; ctx.arc(o.x, o.y, o.r, 0, Math.PI*2); ctx.fill();
+  }
+
+  // draw enemies
+  for (const e of state.enemies){
+    // health tint
+    const t = e.hp / e.maxHp;
+    ctx.fillStyle = e.col;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI*2); ctx.fill();
+    // health bar
+    ctx.fillStyle = '#111'; ctx.fillRect(e.x - e.r, e.y - e.r - 8, e.r*2, 4);
+    ctx.fillStyle = '#f87171'; ctx.fillRect(e.x - e.r, e.y - e.r - 8, (e.r*2) * clamp(t,0,1), 4);
+  }
+
+  // bullets
+  for (const b of state.bullets){
+    ctx.fillStyle = '#fde68a'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+  }
+
+  // particles
+  for (const p of state.particles){
+    ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 2, 2);
+  }
 
   // player
   const p = state.player;
-  const px = p.x * t + t/2, py = p.y * t + t/2;
-  ctx.fillStyle = '#60a5fa';
-  ctx.beginPath(); ctx.arc(px,py, Math.max(4, t*0.42), 0, Math.PI*2); ctx.fill();
-
-  // HUD overlays
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.fillRect(6,6, 260, 44);
-  ctx.fillStyle = '#e6eef8';
-  ctx.font = (Math.max(12, Math.floor(t*0.6))) + 'px ui-sans-serif';
-  ctx.fillText(`Depth: ${state.depth}   HP: ${p.hp}/${p.maxHp}   ATK:${p.atk} DEF:${p.def}`, 12, 28);
-  ctx.fillStyle = '#9fb0c8';
-  ctx.fillText(`LVL:${p.lvl} XP:${p.xp}   Best:${bestDepth}`, 12, 44);
-
-  // messages box handled by DOM
+  ctx.beginPath(); ctx.fillStyle = '#60a5fa'; ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+  // player HP bar
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(8,8,110,12);
+  ctx.fillStyle = '#10b981'; ctx.fillRect(8,8, Math.max(0, 110 * (p.hp / p.maxHp)), 12);
+  ctx.strokeStyle = '#08303b'; ctx.strokeRect(8,8,110,12);
 }
 
-/* ----- Turn / Actions ----- */
-function findEnemyAt(x,y){
-  return state.enemies.findIndex(e => e.x === x && e.y === y);
-}
-function findItemAt(x,y){
-  return state.items.findIndex(it => it.x === x && it.y === y);
-}
+// Controls: Restart button
+document.getElementById('restartBtn').addEventListener('click', ()=>{ if (confirm('Restart run?')) restart(); });
+function restart(){ createNewRun(); }
 
-function playerMove(dx, dy){
-  if (!state || state.dead) return;
-  const nx = state.player.x + dx;
-  const ny = state.player.y + dy;
-  if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) return;
-  const tileChar = state.map[ny][nx];
-  if (tileChar === '#'){ pushMsg('You bump into a wall.'); return; }
-  const enemyIndex = findEnemyAt(nx, ny);
-  if (enemyIndex >= 0){ attackEnemy(enemyIndex); return; }
-  // move
-  state.player.x = nx; state.player.y = ny;
-  // pick up automatically? we'll leave manual pick-up with G
-  const itemIdx = findItemAt(nx, ny);
-  if (itemIdx >= 0){
-    // notify but don't auto-equip; G to pick up
-    pushMsg('There is something here: ' + state.items[itemIdx].type + ' (press G to pick up).');
-  }
-  if (state.stairs.x === nx && state.stairs.y === ny){
-    descendFloor();
-    return;
-  }
-  state.turn++;
-  enemyTurn();
-  draw();
-}
+// init joystick
+initJoystick();
 
-function attackEnemy(index){
-  const e = state.enemies[index];
-  const dmg = Math.max(1, state.player.atk - e.def);
-  e.hp -= dmg;
-  pushMsg(`You hit an enemy for ${dmg} damage.`);
-  if (e.hp <= 0){
-    pushMsg('Enemy dies. +XP.');
-    state.player.xp += 4;
-    state.enemies.splice(index,1);
-    checkLevel();
-  } else {
-    // enemy retaliates
-    const edmg = Math.max(1, e.atk - state.player.def);
-    state.player.hp -= edmg;
-    pushMsg(`Enemy strikes back for ${edmg}.`);
-    if (state.player.hp <= 0) playerDies();
-  }
-  state.turn++;
-  enemyTurn();
-  draw();
-}
+// Start with some enemies
+for (let i=0;i<3;i++) spawnEnemy();
 
-function pickUpHere(){
-  const idx = findItemAt(state.player.x, state.player.y);
-  if (idx < 0){ pushMsg('Nothing to pick up here.'); return; }
-  const it = state.items[idx];
-  if (it.type === 'potion'){ state.player.hp = Math.min(state.player.maxHp, state.player.hp + 6); pushMsg('You drink a potion and feel better.'); }
-  else if (it.type === 'sword'){ state.player.atk += 1; pushMsg('You equip a sword. ATK increased.'); }
-  else if (it.type === 'leather'){ state.player.def += 1; pushMsg('You wear leather armor. DEF increased.'); }
-  else if (it.type === 'ring'){ state.player.maxHp += 2; state.player.hp += 2; pushMsg('A ring boosts your vitality.'); }
-  state.items.splice(idx,1);
-  draw();
-}
-
-function descendFloor(){
-  pushMsg('You descend the stairs deeper...');
-  // preserve player stats, heal small fraction, bump seed
-  const prev = state.player;
-  const saved = { lvl: prev.lvl, xp: prev.xp, atk: prev.atk, def: prev.def, maxHp: prev.maxHp, hp: Math.min(prev.maxHp, prev.hp + Math.floor(prev.maxHp*0.4)) };
-  seed = (seed + Math.floor(Math.random()*9999)) >>> 0;
-  // regenerate new map & restore player after small delay (to allow RNG to change)
-  setTimeout(()=>{
-    rng = mulberry32(seed);
-    const M = generateMap();
-    state.map = M.map; state.w = M.w; state.h = M.h; state.rooms = M.rooms;
-    // place player at center of first room
-    const spawn = state.rooms[0];
-    state.player.x = spawn.x + Math.floor(spawn.w/2);
-    state.player.y = spawn.y + Math.floor(spawn.h/2);
-    // new enemies/items
-    state.enemies = [];
-    const enemyCount = 6 + Math.floor(rng()*6) + state.depth; // scale with depth
-    for (let i=0;i<enemyCount;i++){
-      const r = state.rooms[Math.floor(rng()*state.rooms.length)];
-      const ex = r.x + Math.floor(r.w * rng());
-      const ey = r.y + Math.floor(r.h * rng());
-      if (state.map[ey][ex] === '.' && (ex !== state.player.x || ey !== state.player.y)){
-        const hp = 4 + Math.floor(rng()*4) + Math.floor(state.depth/2);
-        const atk = 2 + Math.floor(state.depth/3);
-        state.enemies.push({ x: ex, y: ey, hp: hp, atk: atk, def: 0 });
-      }
-    }
-    state.items = [];
-    const itemTypes = ['potion','sword','leather','ring'];
-    for (let i=0;i<8;i++){
-      const r = state.rooms[Math.floor(rng()*state.rooms.length)];
-      const ix = r.x + Math.floor(r.w * rng());
-      const iy = r.y + Math.floor(r.h * rng());
-      if (state.map[iy][ix] === '.' && (ix !== state.player.x || iy !== state.player.y)){
-        state.items.push({ x: ix, y: iy, type: itemTypes[Math.floor(rng()*itemTypes.length)] });
-      }
-    }
-    const lastRoom = state.rooms[state.rooms.length-1];
-    state.stairs = { x: lastRoom.x + Math.floor(lastRoom.w/2), y: lastRoom.y + Math.floor(lastRoom.h/2) };
-    // restore player stats
-    state.player.lvl = saved.lvl; state.player.xp = saved.xp; state.player.atk = saved.atk; state.player.def = saved.def; state.player.maxHp = saved.maxHp; state.player.hp = saved.hp;
-    state.depth++;
-    if (state.depth > bestDepth){ bestDepth = state.depth; localStorage.setItem('dd_best', String(bestDepth)); }
-    resizeCanvas(); draw(); updateUI();
-  }, 60);
-}
-
-function enemyTurn(){
-  // simple chase: enemies step toward player using Manhattan move
-  for (let i=0;i<state.enemies.length;i++){
-    const e = state.enemies[i];
-    const dx = state.player.x - e.x;
-    const dy = state.player.y - e.y;
-    const dist = Math.abs(dx) + Math.abs(dy);
-    if (dist <= 12){
-      // choose primary axis
-      let mov;
-      if (Math.abs(dx) > Math.abs(dy)) mov = [dx>0?1:-1, 0];
-      else mov = [0, dy>0?1:-1];
-      const nx = e.x + mov[0], ny = e.y + mov[1];
-      // attempt attack if player is there
-      if (nx === state.player.x && ny === state.player.y){
-        const dmg = Math.max(1, e.atk - state.player.def);
-        state.player.hp -= dmg;
-        pushMsg(`An enemy hits you for ${dmg}.`);
-        if (state.player.hp <= 0) playerDies();
-      } else {
-        // move if tile free (floor and no enemy there)
-        if (state.map[ny][nx] === '.' && !state.enemies.some(en => en.x===nx && en.y===ny) ){
-          e.x = nx; e.y = ny;
-        }
-      }
-    } else {
-      // small random wander
-      if (Math.random() < 0.06){
-        const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-        const r = dirs[Math.floor(Math.random()*4)];
-        const nx = e.x + r[0], ny = e.y + r[1];
-        if (state.map[ny][nx] === '.' && !state.enemies.some(en => en.x===nx && en.y===ny) ){
-          e.x = nx; e.y = ny;
-        }
-      }
-    }
-  }
-}
-
-function checkLevel(){
-  const needed = state.player.lvl * 6;
-  if (state.player.xp >= needed){
-    state.player.xp -= needed;
-    state.player.lvl++;
-    state.player.maxHp += 2;
-    state.player.atk += 1;
-    state.player.hp = state.player.maxHp;
-    pushMsg('You level up! Stats improved.');
-  }
-}
-
-function playerDies(){
-  pushMsg('You died...');
-  state.dead = true;
-  deadPanel.style.display = 'block';
-  deadInfo.innerText = `Depth reached: ${state.depth}   Best depth: ${bestDepth}`;
-}
-
-/* ----- Input ----- */
-window.addEventListener('keydown', (e)=>{
-  if (!state || state.dead) {
-    if (e.code === 'KeyR'){ restartRun(); }
-    return;
-  }
-  const mapKey = e.code;
-  if (['ArrowUp','KeyW'].includes(mapKey)) playerMove(0,-1);
-  if (['ArrowDown','KeyS'].includes(mapKey)) playerMove(0,1);
-  if (['ArrowLeft','KeyA'].includes(mapKey)) playerMove(-1,0);
-  if (['ArrowRight','KeyD'].includes(mapKey)) playerMove(1,0);
-  if (mapKey === 'KeyG') pickUpHere();
-  if (mapKey === 'KeyI'){
-    // inspect nearby items
-    const near = state.items.filter(it => Math.abs(it.x - state.player.x) + Math.abs(it.y - state.player.y) <= 3);
-    if (near.length === 0) pushMsg('No items nearby.');
-    else pushMsg('Nearby items: ' + near.map(it=>it.type).join(', '));
-  }
-  if (mapKey === 'KeyR'){ restartRun(); }
-});
-
-document.getElementById('newSeed').addEventListener('click', ()=>{
-  seed = Math.floor(Math.random()*1e9);
-  rng = mulberry32(seed);
-  newRun();
-});
-document.getElementById('restart').addEventListener('click', ()=>{ restartRun(); });
-document.getElementById('tryAgain').addEventListener('click', ()=>{ restartRun(); });
-
-function restartRun(){
-  seed = Math.floor(Math.random()*1e9);
-  state = null;
-  deadPanel.style.display = 'none';
-  newRun();
-}
-
-/* ----- Save map image ----- */
-document.getElementById('download').addEventListener('click', ()=>{
-  const link = document.createElement('a');
-  link.download = `dungeon-depth${state ? state.depth : 1}.png`;
-  link.href = canvas.toDataURL('image/png');
-  link.click();
-});
-
-/* ----- Helpers on death / cleanup ----- */
-function dieCleanup(){
-  // nothing heavy now
-}
-
-/* ----- UI update ----- */
-function updateUI(){
-  if (!state) return;
-  depthLabel.innerText = `Depth: ${state.depth}`;
-  statsLabel.innerText = `HP: ${state.player.hp}/${state.player.maxHp} • ATK: ${state.player.atk} • DEF: ${state.player.def} • LVL:${state.player.lvl} XP:${state.player.xp}`;
-  messagesEl.innerText = state.messages.slice(-8).join('\\n');
-}
-
-/* ----- Game loop UI refresh (not animation heavy, turn-based) ----- */
-setInterval(()=>{
-  if (!state) return;
-  updateUI();
-  draw();
-}, 120);
-
-/* ----- Start ----- */
-newRun();
-window.addEventListener('resize', ()=>{ if (state) { resizeCanvas(); draw(); } });
 </script>
-
 </body>
 </html>
