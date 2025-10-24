@@ -1,552 +1,252 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 
-// === Hyper Dash Runner — single-file React game (Canvas) ===
-// Controls:
-//  - Desktop: Space/Up = jump, Double-jump in air; Shift/X = dash; P = pause; R = restart
-//  - Mobile: On-screen Jump/Dash buttons
-// Goal: survive, collect orbs, chain dashes, buy upgrades between runs.
-// This is intentionally single-file for easy copy/paste and preview.
+// Dungeon Drift — single-file roguelike demo (React + Canvas)
+// Features:
+// - Procedural dungeon generation (random walk + rooms)
+// - Turn-based movement (arrow keys / WASD)
+// - Enemies that chase the player (simple pathing)
+// - Items (potions, weapons, armor) and inventory (use with I)
+// - XP, leveling, stat increases
+// - Permadeath with high score (depth reached) persisted to localStorage
+// - Small UI + keyboard controls
 
-export default function Game() {
+export default function DungeonDrift(){
   const canvasRef = useRef(null);
-  const rafRef = useRef();
-  const lastTsRef = useRef(0);
-  const [paused, setPaused] = useState(false);
-  const [dead, setDead] = useState(false);
-  const [score, setScore] = useState(0);
-  const [high, setHigh] = useState(() => Number(localStorage.getItem("hdr_high")) || 0);
-  const [orbs, setOrbs] = useState(() => Number(localStorage.getItem("hdr_orbs")) || 0);
-  const [shopOpen, setShopOpen] = useState(false);
   const [seed, setSeed] = useState(() => Math.floor(Math.random()*1e9));
+  const rngRef = useRef(() => Math.random());
+  const mapRef = useRef(null);
+  const stateRef = useRef(null);
+  const [msg, setMsg] = useState('Welcome to Dungeon Drift — press Arrow keys or WASD to move. Press I to open inventory.');
+  const [turn, setTurn] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [depth, setDepth] = useState(1);
+  const [bestDepth, setBestDepth] = useState(() => Number(localStorage.getItem('dd_best')) || 1);
 
-  // Upgrades stored locally
-  const [upgrades, setUpgrades] = useState(() => {
-    const saved = localStorage.getItem("hdr_upgrades");
-    return saved ? JSON.parse(saved) : { maxJumps: 2, dashCount: 1, magnet: 0, shield: 0, boost: 0 };
-  });
+  // Simple seeded RNG (mulberry32)
+  function setSeeded(s){ let t = s >>> 0; rngRef.current = () => { t += 0x6D2B79F5; let r = Math.imul(t ^ t>>>15, 1 | t); r ^= r + Math.imul(r ^ r>>>7, 61 | r); return ((r ^ r>>>14) >>> 0) / 4294967296; }; }
+  useEffect(()=>{ setSeeded(seed); newRun(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [seed]);
 
-  const keys = useRef({});
+  // Map generation: grid with random rooms + drunkard carve tunnels
+  function generateMap(w = 45, h = 31){
+    const rng = rngRef.current;
+    const map = new Array(h).fill(0).map(()=>new Array(w).fill('#'));
 
-  // PRNG — deterministic per run
-  function rngFactory(seed) {
-    let s = seed >>> 0;
-    return () => {
-      // Xorshift32
-      s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; 
-      return s / 4294967296;
-    };
+    // carve a few random rectangular rooms
+    const roomCount = 6 + Math.floor(rng()*6);
+    const rooms = [];
+    for (let r=0;r<roomCount;r++){
+      const rw = 4 + Math.floor(rng()*8);
+      const rh = 3 + Math.floor(rng()*6);
+      const rx = 2 + Math.floor(rng()*(w-rw-4));
+      const ry = 2 + Math.floor(rng()*(h-rh-4));
+      for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) map[y][x] = '.';
+      rooms.push({x:rx,y:ry,w:rw,h:rh});
+    }
+
+    // connect rooms with drunkard walker
+    function carveLine(ax,ay,bx,by){ let x=ax,y=ay; while(x!==bx||y!==by){ map[y][x]='.'; if (rng()<0.5) x += Math.sign(bx-x); else y += Math.sign(by-y); } map[by][bx]='.'; }
+    for (let i=1;i<rooms.length;i++){ const a = rooms[i-1]; const b = rooms[i]; const ax = a.x + Math.floor(a.w/2); const ay = a.y + Math.floor(a.h/2); const bx = b.x + Math.floor(b.w/2); const by = b.y + Math.floor(b.h/2); carveLine(ax,ay,bx,by); }
+
+    // fill with sparse tunnels
+    let walkers = 800 + Math.floor(rng()*300);
+    let cx = Math.floor(w/2), cy = Math.floor(h/2);
+    while(walkers-- > 0){ map[cy][cx]='.'; const d = Math.floor(rng()*4); if (d===0) cx = Math.min(w-2, cx+1); if (d===1) cx = Math.max(1, cx-1); if (d===2) cy = Math.min(h-2, cy+1); if (d===3) cy = Math.max(1, cy-1); }
+
+    // make border walls
+    for(let y=0;y<h;y++){ map[y][0]='#'; map[y][w-1]='#'; }
+    for(let x=0;x<w;x++){ map[0][x]='#'; map[h-1][x]='#'; }
+
+    return { map, w, h, rooms };
   }
 
-  // World state
-  const worldRef = useRef();
+  // New run or new floor
+  function newRun(){
+    setGameOver(false);
+    setDepth(1);
+    setMsg('Descend the dungeon. Use I to manage inventory.');
+    const M = generateMap();
+    mapRef.current = M;
+    // initial state
+    const rng = rngRef.current;
+    const spawnRoom = M.rooms[Math.floor(rng()*M.rooms.length)];
+    const px = spawnRoom.x + Math.floor(spawnRoom.w/2);
+    const py = spawnRoom.y + Math.floor(spawnRoom.h/2);
+    const player = { x: px, y: py, hp: 10, maxHp: 10, atk: 3, def: 0, xp: 0, lvl: 1 };
 
-  const resetWorld = () => {
-    const rand = rngFactory(seed);
-    worldRef.current = {
-      t: 0,
-      speed: 300, // px/s base
-      baseSpeed: 300,
-      gravity: 2000,
-      scroll: 0,
-      groundY: 300,
-      lanes: [0],
-      // entities
-      player: {
-        x: 120,
-        y: 0,
-        vx: 0,
-        vy: 0,
-        w: 38,
-        h: 48,
-        jumps: 0,
-        maxJumps: upgrades.maxJumps,
-        dashesLeft: upgrades.dashCount,
-        invuln: 0,
-        shield: 0,
-        dashCD: 0,
-        trail: [],
-      },
-      obstacles: [],
-      enemies: [],
-      pickups: [],
-      particles: [],
-      // difficulty
-      timeToNextSpawn: 0.3,
-      nextSpawn: 0.3,
-      rand,
-      dist: 0,
-    };
-    // ground parallax layers
-    worldRef.current.layers = [
-      { k: 0.2, c: "#0c0f1a" },
-      { k: 0.5, c: "#11162a" },
-      { k: 1,   c: "#141b34" },
-    ];
+    const enemies = [];
+    // place some enemies
+    const enemyCount = 6 + Math.floor(rng()*6);
+    for(let i=0;i<enemyCount;i++){
+      const r = M.rooms[Math.floor(rng()*M.rooms.length)];
+      const ex = r.x + Math.floor(r.w * rng());
+      const ey = r.y + Math.floor(r.h * rng());
+      if (M.map[ey][ex] === '.' && (ex!==px || ey!==py)) enemies.push({ x: ex, y: ey, hp: 4 + Math.floor(rng()*4), atk: 2, def: 0, id: i });
+    }
 
-    // player start height
-    worldRef.current.player.y = worldRef.current.groundY - worldRef.current.player.h;
-  };
+    const items = [];
+    const itemTypes = ['potion','sword','leather','ring'];
+    for(let i=0;i<8;i++){ const r = M.rooms[Math.floor(rng()*M.rooms.length)]; const ix = r.x + Math.floor(r.w * rng()); const iy = r.y + Math.floor(r.h * rng()); if (M.map[iy][ix] === '.' && (ix!==px || iy!==py)) items.push({x:ix,y:iy,type:itemTypes[Math.floor(rng()*itemTypes.length)],id:i}); }
 
-  // Helpers
-  function rectsIntersect(a, b) {
-    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    // stairs down
+    const stairRoom = M.rooms[M.rooms.length-1];
+    const stairs = { x: stairRoom.x + Math.floor(stairRoom.w/2), y: stairRoom.y + Math.floor(stairRoom.h/2) };
+
+    stateRef.current = { player, enemies, items, stairs, messages: [], seed, rng: rngRef.current, map: M.map, w: M.w, h: M.h };
+    draw();
   }
 
-  function spawnStuff(w) {
-    const r = w.rand();
-    const laneY = w.groundY;
-    const farX = 900;
+  // Draw map to canvas
+  function draw(){
+    const s = stateRef.current; if (!s) return; const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext('2d'); const tile = 18; const vw = s.w * tile; const vh = s.h * tile; canvas.width = vw; canvas.height = vh; canvas.style.width = vw + 'px'; canvas.style.height = vh + 'px';
 
-    // Weighted choice: obstacle, enemy, pickups cluster
-    const pick = r;
-    if (pick < 0.45) {
-      // obstacle: box or spike
-      const type = r < 0.5 ? "box" : "spike";
-      const size = 30 + Math.floor(w.rand()*30);
-      w.obstacles.push({ x: farX, y: laneY - size, w: size, h: size, type, col: type === "spike" ? "#d97706" : "#475569" });
-    } else if (pick < 0.75) {
-      // enemy: hovering drone
-      const h = 26, wdt = 36;
-      const y = laneY - (80 + Math.floor(w.rand()*120));
-      const bob = 20 + 20*w.rand();
-      w.enemies.push({ x: farX, y, w: wdt, h, bob, t: 0, type: "drone", col: "#ef4444" });
-    } else {
-      // pickups cluster
-      const count = 3 + Math.floor(w.rand()*5);
-      for (let i=0;i<count;i++) {
-        const oy =  - (20 + Math.floor(w.rand()*140));
-        w.pickups.push({ x: farX + i*40, y: laneY + oy, w: 18, h: 18, type: "orb", col: "#22d3ee"});
-      }
+    // background
+    ctx.fillStyle = '#0b1220'; ctx.fillRect(0,0,vw,vh);
+
+    // tiles
+    for(let y=0;y<s.h;y++) for(let x=0;x<s.w;x++){
+      const ch = s.map[y][x]; const px = x*tile, py = y*tile;
+      if (ch === '#'){ ctx.fillStyle = '#253341'; ctx.fillRect(px,py,tile,tile); }
+      else { ctx.fillStyle = '#07132a'; ctx.fillRect(px,py,tile,tile); }
     }
 
-    // Powerup occasionally
-    if (w.rand() < 0.12) {
-      const types = ["magnet","shield","boost"];
-      const t = types[Math.floor(w.rand()*types.length)];
-      w.pickups.push({ x: farX + 40 + w.rand()*120, y: laneY - 150 - w.rand()*80, w: 20, h: 20, type: t, col: t === "shield" ? "#a3e635" : t === "magnet" ? "#f59e0b" : "#60a5fa" });
-    }
-  }
-
-  function emit(w, x, y, n, c) {
-    for (let i=0;i<n;i++) {
-      w.particles.push({ x, y, vx: (w.rand()-0.5)*200, vy: -100 - w.rand()*200, life: 0.5 + w.rand()*0.7, t:0, c });
-    }
-  }
-
-  // Input
-  useEffect(() => {
-    const down = (e) => { keys.current[e.code] = true; if (e.code === "Space" || e.code === "ArrowUp") e.preventDefault(); };
-    const up = (e) => { keys.current[e.code] = false; };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, []);
-
-  // Game loop
-  useEffect(() => {
-    resetWorld();
-    setScore(0);
-    setDead(false);
-
-    const loop = (ts) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      const w = worldRef.current;
-
-      if (!lastTsRef.current) lastTsRef.current = ts;
-      let dt = (ts - lastTsRef.current) / 1000; // seconds
-      if (dt > 0.05) dt = 0.05; // clamp
-      lastTsRef.current = ts;
-
-      if (!paused && !dead) update(w, dt);
-      render(ctx, w);
-
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-
-    return () => cancelAnimationFrame(rafRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed, paused]);
-
-  function update(w, dt) {
-    w.t += dt;
-    w.dist += w.speed * dt;
-    // incremental difficulty
-    w.baseSpeed += dt * 5; // gentle ramp
-    w.speed = w.baseSpeed + (upgrades.boost ? 80 : 0);
-    w.scroll += w.speed * dt;
-
-    const p = w.player;
-
-    // Player physics
-    p.vy += w.gravity * dt;
-    p.y += p.vy * dt;
-    if (p.y > w.groundY - p.h) { p.y = w.groundY - p.h; p.vy = 0; p.jumps = 0; }
-
-    // Inputs
-    const wantJump = keys.current["Space"] || keys.current["ArrowUp"];
-    const wantDash = keys.current["ShiftLeft"] || keys.current["KeyX"];
-
-    p.dashCD = Math.max(0, p.dashCD - dt);
-    p.invuln = Math.max(0, p.invuln - dt);
-    p.shield = Math.max(0, p.shield - dt);
-
-    // Jump (press edge)
-    if (wantJump && !p._jumpHeld) {
-      if (p.jumps < p.maxJumps) {
-        p.vy = -750;
-        p.jumps++;
-        emit(w, p.x+p.w/2, p.y+p.h, 10, "#22d3ee");
-      }
-    }
-    p._jumpHeld = wantJump;
-
-    // Dash
-    if (wantDash && !p._dashHeld && p.dashesLeft > 0 && p.dashCD === 0) {
-      p.dashesLeft--; p.dashCD = 0.35; p.invuln = Math.max(p.invuln, 0.2);
-      // Add forward burst by temporarily increasing world scroll feel via trail
-      p.trail.push({ life: 0.2, x: p.x, y: p.y, w: p.w, h: p.h });
-      emit(w, p.x+p.w, p.y+p.h/2, 16, "#60a5fa");
-    }
-    p._dashHeld = wantDash;
-
-    // Refill dash on ground
-    if (p.y >= w.groundY - p.h - 0.001) {
-      p.dashesLeft = upgrades.dashCount;
-    }
-
-    // Parallax layers update (implicit via scroll)
-
-    // Spawn logic
-    w.timeToNextSpawn -= dt;
-    if (w.timeToNextSpawn <= 0) {
-      spawnStuff(w);
-      const base = 0.7;
-      const accel = Math.max(0.25, 1.2 - w.t * 0.02);
-      w.timeToNextSpawn = base * accel;
-    }
-
-    const left = -100;
-
-    // Move entities left according to speed
-    const move = (e) => { e.x -= w.speed * dt; };
-    w.obstacles.forEach(move);
-    w.enemies.forEach((e) => { e.x -= w.speed * dt; e.t += dt; e.y += Math.sin((w.t+e.t)*2) * (e.bob*dt);});
-
-    // Pickups attraction (magnet)
-    const magnetRange = 80 + upgrades.magnet*40;
-    w.pickups.forEach((c) => {
-      c.x -= w.speed * dt;
-      if (c.type === "orb" && magnetRange > 0) {
-        const cx = c.x + c.w/2, cy = c.y + c.h/2;
-        const px = p.x + p.w/2, py = p.y + p.h/2;
-        const dx = px - cx, dy = py - cy;
-        const d2 = dx*dx + dy*dy;
-        const r2 = magnetRange*magnetRange;
-        if (d2 < r2) {
-          const d = Math.max(0.001, Math.sqrt(d2));
-          const k = 600 * (1 - d/Math.sqrt(r2));
-          c.x += (dx/d) * k * dt;
-          c.y += (dy/d) * k * dt;
-        }
-      }
+    // items
+    s.items.forEach(it => {
+      ctx.fillStyle = it.type === 'potion' ? '#f97316' : it.type === 'sword' ? '#94a3b8' : it.type === 'leather' ? '#f59e0b' : '#60a5fa';
+      ctx.fillRect(it.x*tile + 4, it.y*tile + 4, tile-8, tile-8);
     });
 
-    // Trails & particles
-    p.trail.forEach(t => t.life -= dt);
-    p.trail = p.trail.filter(t => t.life > 0);
+    // stairs
+    ctx.fillStyle = '#c084fc'; ctx.fillRect(s.stairs.x*tile + 2, s.stairs.y*tile + 2, tile-4, tile-4);
 
-    w.particles.forEach(pt => { pt.t += dt; pt.x += pt.vx*dt; pt.y += pt.vy*dt; });
-    w.particles = w.particles.filter(pt => pt.t < pt.life);
+    // enemies
+    s.enemies.forEach(e => { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(e.x*tile+tile/2, e.y*tile+tile/2, tile/2-2,0,Math.PI*2); ctx.fill(); });
 
-    // Collisions
-    // Player hurt only if not invulnerable; shield can absorb
-    const pRect = { x: p.x, y: p.y, w: p.w, h: p.h };
-
-    // Pickups first
-    let gained = 0;
-    w.pickups = w.pickups.filter(c => {
-      const hit = rectsIntersect(pRect, c);
-      if (hit) {
-        if (c.type === "orb") { gained++; emit(w, c.x, c.y, 6, "#22d3ee"); return false; }
-        if (c.type === "shield") { p.shield = Math.min(3, p.shield + 2 + upgrades.shield); emit(w, p.x, p.y, 12, "#a3e635"); return false; }
-        if (c.type === "magnet") { /* passive via upgrade */ emit(w, p.x, p.y, 10, "#f59e0b"); w.baseSpeed += 0; return false; }
-        if (c.type === "boost") { emit(w, p.x, p.y, 10, "#60a5fa"); w.baseSpeed += 40; return false; }
-      }
-      return c.x + c.w > left;
-    });
-    if (gained) setScore(s => s + gained*10);
-
-    const hitSomething = (arr) => {
-      for (let i=0;i<arr.length;i++) {
-        const e = arr[i];
-        if (rectsIntersect(pRect, e)) {
-          // absorb with shield, else die (unless invuln)
-          if (p.invuln > 0) { emit(w, e.x, e.y, 8, "#60a5fa"); arr.splice(i,1); return false; }
-          if (p.shield > 0) { p.shield = Math.max(0, p.shield - 1); emit(w, e.x, e.y, 12, "#a3e635"); arr.splice(i,1); return false; }
-          return true;
-        }
-      }
-      return false;
-    };
-
-    if (hitSomething(w.obstacles) || hitSomething(w.enemies)) {
-      setDead(true);
-      setHigh(h => { const nh = Math.max(h, score); localStorage.setItem("hdr_high", nh.toString()); return nh; });
-      setOrbs(o => { const no = o + Math.floor(score/10); localStorage.setItem("hdr_orbs", no.toString()); return no; });
-    }
-
-    // Cleanup off-screen
-    w.obstacles = w.obstacles.filter(o => o.x + o.w > left);
-    w.enemies   = w.enemies.filter(e => e.x + e.w > left);
-    w.pickups   = w.pickups.filter(c => c.x + c.w > left);
-  }
-
-  function render(ctx, w) {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const vw = Math.min(900, Math.floor(window.innerWidth));
-    const vh = Math.min(520, Math.floor(window.innerHeight*0.75));
-    const cw = vw * dpr, ch = vh * dpr;
-
-    const canvas = ctx.canvas;
-    if (canvas.width !== cw || canvas.height !== ch) {
-      canvas.width = cw; canvas.height = ch; canvas.style.width = vw+"px"; canvas.style.height = vh+"px";
-    }
-
-    // world units = pixels at dpr scale
-    ctx.save();
-    ctx.scale(dpr, dpr);
-
-    // Sky gradient
-    const g = ctx.createLinearGradient(0,0,0,vh);
-    g.addColorStop(0, "#0b1020");
-    g.addColorStop(1, "#0b132b");
-    ctx.fillStyle = g; ctx.fillRect(0,0,vw,vh);
-
-    // Stars
-    ctx.globalAlpha = 0.6;
-    for (let i=0;i<60;i++) {
-      const x = (i*73 + (w.scroll*0.02)) % (vw+40) - 20;
-      const y = (i*53 % (vh*0.6));
-      ctx.fillStyle = i%5===0?"#e5e7eb":"#9ca3af";
-      ctx.fillRect(x, y, 2, 2);
-    }
-    ctx.globalAlpha = 1;
-
-    // Parallax city silhouettes
-    w.layers.forEach((L, idx) => {
-      ctx.fillStyle = L.c;
-      const h = 120 + idx*30;
-      const baseY = vh - h - 60;
-      const step = 80;
-      const offset = - (w.scroll * L.k) % (step*2);
-      for (let x = -step*2; x < vw + step*2; x += step) {
-        const bw = step - 10 + (idx*10);
-        const bh = h + ((x/step)%3)*15;
-        ctx.fillRect(x + offset, baseY - bh, bw, bh);
-      }
-    });
-
-    // Ground
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(0, w.groundY + 20, vw, vh - (w.groundY+20));
-    // Rail
-    ctx.fillStyle = "#1e293b";
-    ctx.fillRect(0, w.groundY, vw, 6);
-    for (let i=0;i<vw;i+=24){ ctx.fillRect((i - (w.scroll%24)), w.groundY+6, 12, 3); }
-
-    // Pickups
-    w.pickups.forEach(c => {
-      ctx.fillStyle = c.col;
-      ctx.beginPath();
-      ctx.roundRect(Math.floor(c.x), Math.floor(c.y), c.w, c.h, 4);
-      ctx.fill();
-    });
-
-    // Obstacles
-    w.obstacles.forEach(o => {
-      ctx.fillStyle = o.col;
-      if (o.type === "spike") {
-        const spikes = Math.max(2, Math.floor(o.w/10));
-        for (let i=0;i<spikes;i++) {
-          const x = o.x + i*(o.w/spikes);
-          ctx.beginPath();
-          ctx.moveTo(x, o.y+o.h);
-          ctx.lineTo(x + o.w/spikes/2, o.y);
-          ctx.lineTo(x + o.w/spikes, o.y+o.h);
-          ctx.closePath(); ctx.fill();
-        }
-      } else {
-        ctx.fillRect(Math.floor(o.x), Math.floor(o.y), o.w, o.h);
-      }
-    });
-
-    // Enemies (drones)
-    w.enemies.forEach(e => {
-      ctx.fillStyle = e.col;
-      ctx.fillRect(Math.floor(e.x), Math.floor(e.y), e.w, e.h);
-      // eye
-      ctx.fillStyle = "#fee2e2";
-      ctx.fillRect(Math.floor(e.x+e.w-10), Math.floor(e.y+6), 4, 4);
-      // legs
-      ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(e.x+4, e.y+e.h);
-      ctx.lineTo(e.x+4, e.y+e.h+6);
-      ctx.moveTo(e.x+e.w-4, e.y+e.h);
-      ctx.lineTo(e.x+e.w-4, e.y+e.h+6);
-      ctx.stroke();
-    });
-
-    // Player
-    const p = w.player;
-    // Shadow
-    ctx.globalAlpha = 0.2; ctx.fillStyle = "black"; ctx.beginPath(); ctx.ellipse(p.x+p.w/2, w.groundY+10, 18, 6, 0, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
-
-    // Trail (dash)
-    p.trail.forEach(t => {
-      ctx.globalAlpha = Math.max(0, t.life*4);
-      ctx.fillStyle = "#60a5fa";
-      ctx.fillRect(Math.floor(t.x), Math.floor(t.y), t.w, t.h);
-    });
-    ctx.globalAlpha = 1;
-
-    // Body
-    ctx.fillStyle = "#93c5fd";
-    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), p.w, p.h);
-    // visor
-    ctx.fillStyle = "#1d4ed8"; ctx.fillRect(p.x+6, p.y+10, p.w-12, 10);
-
-    // Shield halo
-    if (p.shield > 0) {
-      ctx.strokeStyle = "#a3e635"; ctx.lineWidth = 3; ctx.globalAlpha = 0.6 + 0.4*Math.sin(w.t*8);
-      ctx.beginPath(); ctx.roundRect(p.x-4, p.y-4, p.w+8, p.h+8, 8); ctx.stroke(); ctx.globalAlpha = 1;
-    }
-
-    // Particles
-    w.particles.forEach(pt => {
-      ctx.globalAlpha = Math.max(0, 1 - pt.t/pt.life);
-      ctx.fillStyle = pt.c;
-      ctx.fillRect(Math.floor(pt.x), Math.floor(pt.y), 3, 3);
-    });
-    ctx.globalAlpha = 1;
+    // player
+    const p = s.player; ctx.fillStyle = '#60a5fa'; ctx.beginPath(); ctx.arc(p.x*tile+tile/2, p.y*tile+tile/2, tile/2-2,0,Math.PI*2); ctx.fill();
 
     // HUD
-    ctx.fillStyle = "#e2e8f0"; ctx.font = "16px ui-sans-serif,system-ui";
-    ctx.fillText(`Score: ${score}`, 12, 22);
-    ctx.fillText(`Best: ${high}`, 12, 42);
-    ctx.fillText(`Orbs: ${orbs}`, 12, 62);
-    ctx.fillText(`Jumps: ${w.player.maxJumps}  Dash: ${w.player.dashesLeft}/${upgrades.dashCount}`, 12, 82);
+    ctx.fillStyle = '#e6eef8'; ctx.font = '14px ui-sans-serif'; ctx.fillText(`Depth: ${depth}  HP: ${p.hp}/${p.maxHp}  ATK:${p.atk} DEF:${p.def}  LVL:${p.lvl} XP:${p.xp}`, 8, 14);
+    ctx.fillText(`Best Depth: ${bestDepth}`, 8, 30);
 
-    if (dead) {
-      ctx.fillStyle = "#e2e8f0"; ctx.font = "bold 28px ui-sans-serif,system-ui";
-      const text = "Game Over";
-      const tw = ctx.measureText(text).width;
-      ctx.fillText(text, (vw - tw)/2, 120);
-      ctx.font = "16px ui-sans-serif,system-ui";
-      ctx.fillText("Tap or press R to try again", vw/2 - 120, 160);
-    }
-
-    ctx.restore();
+    // messages
+    const msgs = stateRef.current.messages.slice(-4);
+    ctx.fillStyle = '#fff'; ctx.font = '12px ui-sans-serif'; for(let i=0;i<msgs.length;i++){ ctx.fillText(msgs[i], 8, s.h*tile - 8 - (msgs.length-i-1)*14); }
   }
 
-  // Restart
-  const restart = () => {
-    setDead(false);
-    setScore(0);
-    setSeed(Math.floor(Math.random()*1e9));
-    lastTsRef.current = 0;
-  };
+  // Player turn processing
+  function playerMove(dx, dy){ if (gameOver) return; const s = stateRef.current; const nx = s.player.x + dx; const ny = s.player.y + dy; if (nx <0 || nx>=s.w || ny<0 || ny>=s.h) return; const tile = s.map[ny][nx]; if (tile === '#'){ pushMsg('You bump into a wall.'); return; }
+    // check for enemy
+    const enIndex = s.enemies.findIndex(e => e.x === nx && e.y === ny);
+    if (enIndex >= 0){ attackEnemy(enIndex); return; }
+    // move to tile
+    s.player.x = nx; s.player.y = ny; // pickup
+    const itemIndex = s.items.findIndex(it => it.x === nx && it.y === ny);
+    if (itemIndex >= 0){ const it = s.items[itemIndex]; pickUpItem(it); s.items.splice(itemIndex,1); }
+    // stairs
+    if (s.stairs.x === nx && s.stairs.y === ny){ descendFloor(); }
+    // after player move, enemies act
+    setTurn(t => t+1);
+    enemyTurn(); draw(); }
 
-  // Keybinds for meta
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.code === "KeyP") setPaused(p => !p);
-      if (e.code === "KeyR") { if (dead) restart(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [dead]);
-
-  // Mobile buttons handlers
-  const jump = () => { keys.current["Space"] = true; setTimeout(()=>{ keys.current["Space"] = false; }, 80); };
-  const dash = () => { keys.current["KeyX"] = true; setTimeout(()=>{ keys.current["KeyX"] = false; }, 60); };
-
-  // Shop logic
-  const shop = useMemo(() => ([
-    { key: "maxJumps", label: "+1 Max Jump", cap: 3, base: 60 },
-    { key: "dashCount", label: "+1 Dash", cap: 3, base: 80 },
-    { key: "magnet", label: "Magnet Range +", cap: 3, base: 70 },
-    { key: "shield", label: "Shield Capacity +", cap: 3, base: 90 },
-    { key: "boost", label: "Permanent Speed Boost", cap: 1, base: 120 },
-  ]), []);
-
-  const buy = (it) => {
-    const lvl = upgrades[it.key];
-    if (lvl >= it.cap) return;
-    const cost = Math.floor(it.base * Math.pow(1.7, lvl));
-    if (orbs >= cost) {
-      const nu = { ...upgrades, [it.key]: lvl+1 };
-      setUpgrades(nu);
-      localStorage.setItem("hdr_upgrades", JSON.stringify(nu));
-      const no = orbs - cost; setOrbs(no); localStorage.setItem("hdr_orbs", no.toString());
+  function attackEnemy(index){ const s = stateRef.current; const e = s.enemies[index]; const dmg = Math.max(1, s.player.atk - e.def);
+    e.hp -= dmg; pushMsg(`You hit the ${e.type||'enemy'} for ${dmg}.`);
+    if (e.hp <= 0){ pushMsg('Enemy dies.'); // award xp
+      s.player.xp += 4; s.enemies.splice(index,1); checkLevel();
     }
-  };
+    // enemy retaliates if alive
+    else { const edmg = Math.max(1, e.atk - s.player.def); s.player.hp -= edmg; pushMsg(`Enemy strikes back for ${edmg}.`); if (s.player.hp <= 0) playerDies(); }
+    setTurn(t => t+1);
+    enemyTurn(); draw(); }
 
+  function pickUpItem(item){ const s = stateRef.current; if (item.type === 'potion'){ s.player.hp = Math.min(s.player.maxHp, s.player.hp + 6); pushMsg('You drink a potion and heal.'); }
+    else if (item.type === 'sword'){ s.player.atk += 1; pushMsg('You equip a sword. ATK increased.'); }
+    else if (item.type === 'leather'){ s.player.def += 1; pushMsg('You wear leather armor. DEF increased.'); }
+    else if (item.type === 'ring'){ s.player.maxHp += 2; s.player.hp += 2; pushMsg('A strange ring bolsters your vitality.'); }
+  }
+
+  function enemyTurn(){ const s = stateRef.current; // simple chase: move 1 step toward player if distance < 10
+    for(let i=0;i<s.enemies.length;i++){ const e = s.enemies[i]; const dx = stateRef.current.player.x - e.x; const dy = stateRef.current.player.y - e.y; const dist = Math.abs(dx) + Math.abs(dy);
+      if (dist <= 12){ // attempt to move closer
+        const mov = Math.abs(dx) > Math.abs(dy) ? (dx>0? [1,0] : [-1,0]) : (dy>0? [0,1] : [0,-1]);
+        const nx = e.x + mov[0], ny = e.y + mov[1]; if (nx === stateRef.current.player.x && ny === stateRef.current.player.y){ // attack
+          const dmg = Math.max(1, e.atk - stateRef.current.player.def); stateRef.current.player.hp -= dmg; pushMsg(`Enemy hits you for ${dmg}.`); if (stateRef.current.player.hp <= 0) playerDies(); }
+        else if (stateRef.current.map[ny][nx] === '.' && !stateRef.current.enemies.some(en=>en.x===nx && en.y===ny)) { e.x = nx; e.y = ny; }
+      } else {
+        // random wander
+        if (Math.random() < 0.05){ const dirs = [[1,0],[-1,0],[0,1],[0,-1]]; const r = dirs[Math.floor(Math.random()*4)]; const nx = e.x + r[0], ny = e.y + r[1]; if (stateRef.current.map[ny][nx] === '.' && !stateRef.current.enemies.some(en=>en.x===nx && en.y===ny)) { e.x = nx; e.y = ny; } }
+      }
+    }
+  }
+
+  function checkLevel(){ const s = stateRef.current; const needed = s.player.lvl * 6; if (s.player.xp >= needed){ s.player.xp -= needed; s.player.lvl += 1; s.player.maxHp += 2; s.player.atk += 1; s.player.hp = s.player.maxHp; pushMsg(`You reach level ${s.player.lvl}! Stats improved.`); } }
+
+  function playerDies(){ pushMsg('You died...'); setGameOver(true); if (depth > bestDepth){ setBestDepth(depth); localStorage.setItem('dd_best', String(depth)); } }
+
+  function descendFloor(){ pushMsg('You descend deeper...'); setDepth(d => d+1); // regenerate map with same player xp/level
+    // keep player stats, but heal a bit
+    const prev = stateRef.current.player; const saved = { lvl: prev.lvl, xp: prev.xp, atk: prev.atk, def: prev.def, maxHp: prev.maxHp, hp: Math.min(prev.maxHp, prev.hp + Math.floor(prev.maxHp*0.4)) };
+    // new seed tweak
+    const newSeed = (seed + Math.floor(Math.random()*9999)) >>> 0; setSeed(newSeed);
+    // after setSeed triggers newRun, we must restore player with saved state — so use timeout
+    setTimeout(()=>{ const s = stateRef.current; if (!s) return; s.player.lvl = saved.lvl; s.player.xp = saved.xp; s.player.atk = saved.atk; s.player.def = saved.def; s.player.maxHp = saved.maxHp; s.player.hp = saved.hp; draw(); }, 60);
+  }
+
+  function pushMsg(t){ const s = stateRef.current; if (!s) return; s.messages.push(t); if (s.messages.length > 12) s.messages.shift(); setMsg(t); }
+
+  // Keyboard controls
+  useEffect(()=>{
+    const onKey = (e) => {
+      if (['ArrowUp','KeyW'].includes(e.code)){ playerMove(0,-1); }
+      if (['ArrowDown','KeyS'].includes(e.code)){ playerMove(0,1); }
+      if (['ArrowLeft','KeyA'].includes(e.code)){ playerMove(-1,0); }
+      if (['ArrowRight','KeyD'].includes(e.code)){ playerMove(1,0); }
+      if (e.code === 'KeyI'){ // inventory quick display: list items nearby and stats
+        const s = stateRef.current; const itemsHere = s.items.filter(it => Math.abs(it.x - s.player.x) + Math.abs(it.y - s.player.y) <= 3);
+        if (itemsHere.length === 0) pushMsg('No items nearby.'); else pushMsg('Nearby items: ' + itemsHere.map(it=>it.type).join(', '));
+      }
+      if (e.code === 'KeyR'){ // restart
+        setSeed(Math.floor(Math.random()*1e9)); setBestDepth(b=>b); newRun(); }
+      if (e.code === 'KeyG'){ // pick up everything on tile
+        const s = stateRef.current; const idx = s.items.findIndex(it => it.x === s.player.x && it.y === s.player.y); if (idx >= 0){ pickUpItem(s.items[idx]); s.items.splice(idx,1); draw(); } else pushMsg('Nothing to pick up here.'); }
+    };
+    window.addEventListener('keydown', onKey); return ()=>window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameOver, depth]);
+
+  // initial draw
+  useEffect(()=>{ draw(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn, msg, gameOver]);
+
+  // small responsive container
   return (
-    <div className="w-full min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center px-3 py-4 select-none">
-      <div className="w-full max-w-3xl flex items-center justify-between gap-2 mb-2">
-        <h1 className="text-xl font-bold tracking-tight">Hyper Dash Runner</h1>
-        <div className="flex items-center gap-2">
-          <button onClick={()=>setPaused(p=>!p)} className="px-3 py-1 rounded-2xl bg-slate-800 hover:bg-slate-700 shadow">{paused?"Resume":"Pause"}</button>
-          <button onClick={()=>setShopOpen(s=>!s)} className="px-3 py-1 rounded-2xl bg-slate-800 hover:bg-slate-700 shadow">Shop</button>
-          <button onClick={restart} className="px-3 py-1 rounded-2xl bg-sky-700 hover:bg-sky-600 shadow">Restart</button>
+    <div className='w-full min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-4 select-none'>
+      <div className='w-full max-w-3xl flex items-center justify-between mb-2'>
+        <h1 className='text-xl font-bold'>Dungeon Drift</h1>
+        <div className='flex items-center gap-2'>
+          <button onClick={()=>{ setSeed(Math.floor(Math.random()*1e9)); }} className='px-3 py-1 rounded bg-slate-800'>New Seed</button>
+          <button onClick={()=>{ newRun(); }} className='px-3 py-1 rounded bg-emerald-700'>Restart Run</button>
         </div>
       </div>
 
-      <canvas ref={canvasRef} className="rounded-2xl shadow-lg border border-slate-800 bg-black" />
-
-      <div className="mt-2 text-sm opacity-80">Jump: Space/Up • Dash: Shift/X • P: Pause • R: Restart</div>
-
-      {/* Mobile Controls */}
-      <div className="fixed bottom-4 left-0 right-0 mx-auto max-w-3xl px-4 flex items-center justify-between pointer-events-none">
-        <button onTouchStart={jump} onMouseDown={jump} className="pointer-events-auto px-5 py-4 rounded-2xl bg-slate-800/70 backdrop-blur shadow active:scale-95">Jump</button>
-        <button onTouchStart={dash} onMouseDown={dash} className="pointer-events-auto px-5 py-4 rounded-2xl bg-slate-800/70 backdrop-blur shadow active:scale-95">Dash</button>
+      <div className='bg-black/60 p-2 rounded shadow-lg'>
+        <canvas ref={canvasRef} className='rounded' />
       </div>
 
-      {/* Shop Drawer */}
-      {shopOpen && (
-        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center p-4 z-50" onClick={()=>setShopOpen(false)}>
-          <div className="w-full max-w-md bg-slate-900 rounded-2xl border border-slate-800 shadow-xl p-4" onClick={(e)=>e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-lg font-semibold">Runner Upgrades</h2>
-              <button className="px-3 py-1 rounded-2xl bg-slate-800 hover:bg-slate-700" onClick={()=>setShopOpen(false)}>Close</button>
-            </div>
-            <div className="text-sm mb-3">Orbs: <span className="font-semibold">{orbs}</span></div>
-            <div className="space-y-2">
-              {shop.map((it)=>{
-                const lvl = upgrades[it.key];
-                const cost = lvl >= it.cap ? null : Math.floor(it.base * Math.pow(1.7, lvl));
-                return (
-                  <div key={it.key} className="flex items-center justify-between bg-slate-800/60 rounded-xl p-3">
-                    <div>
-                      <div className="font-medium">{it.label}</div>
-                      <div className="text-xs opacity-80">Level {lvl} / {it.cap}</div>
-                    </div>
-                    <button disabled={lvl>=it.cap || orbs<cost} onClick={()=>buy(it)} className={`px-3 py-1 rounded-lg shadow ${lvl>=it.cap?"bg-slate-700 opacity-60":"bg-sky-700 hover:bg-sky-600"}`}>
-                      {lvl>=it.cap?"Maxed":`Buy (${cost})`}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="text-xs opacity-80 mt-3">Upgrades persist between runs on this device.</div>
-          </div>
+      <div className='mt-3 text-sm max-w-3xl text-center'>
+        {msg}
+        <div className='mt-2 text-xs opacity-80'>Controls: Arrow keys / WASD to move, G pick up, I inspect nearby, R restart. Descend stairs to go deeper. Permadeath is on.</div>
+      </div>
+
+      {gameOver && (
+        <div className='mt-3 p-3 bg-rose-900/80 rounded'>
+          <div className='font-bold text-lg'>You died</div>
+          <div>Depth reached: {depth}</div>
+          <div>Best depth: {bestDepth}</div>
+          <button onClick={()=>{ setSeed(Math.floor(Math.random()*1e9)); newRun(); setGameOver(false); }} className='mt-2 px-3 py-1 bg-slate-800 rounded'>Try Again</button>
         </div>
       )}
 
-      {/* Tips */}
-      <div className="mt-3 text-xs opacity-70 max-w-3xl text-center">
-        Tip: chain jumps to clear drones, dash to phase through hazards briefly, and grab blue orbs for poin
+    </div>
+  );
+}
