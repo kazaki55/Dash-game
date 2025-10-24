@@ -1,163 +1,253 @@
-<!DOCTYPE html><html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Neon Rush</title>
-  <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: black;
-      font-family: sans-serif;
-      color: #0ff;
-      text-align: center;
-    }
-    #gameCanvas {
-      display: block;
-      margin: 0 auto;
-      background: radial-gradient(circle at center, #111, #000);
-    }
-    #ui {
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      color: #0ff;
-      font-size: 18px;
-    }
-    .btn {
-      position: absolute;
-      bottom: 20px;
-      padding: 15px 25px;
-      font-size: 20px;
-      background: rgba(0, 255, 255, 0.2);
-      border: 2px solid #0ff;
-      border-radius: 10px;
-      color: #0ff;
-      user-select: none;
-    }
-    #jumpBtn {
-      left: 20px;
-    }
-    #dashBtn {
-      right: 20px;
-    }
-  </style>
-</head>
-<body>
-  <canvas id="gameCanvas" width="800" height="450"></canvas>
-  <div id="ui">Score: <span id="score">0</span></div>
-  <div id="jumpBtn" class="btn">JUMP</div>
-  <div id="dashBtn" class="btn">DASH</div>  <script>
-    const canvas = document.getElementById("gameCanvas");
-    const ctx = canvas.getContext("2d");
-    const scoreEl = document.getElementById("score");
+: 0, fireRate: 0.25 / (1 + upgrades.rapid*0.35), dmg: 1 + upgrades.dmg, spread: upgrades.spread,
+      shield: 0
+    };
+    stateRef.current = {
+      tick: 0,
+      shake: 0,
+      w, player,
+      stars: Array.from({length:120}).map((_,i)=>({x:Math.random()*w.w,y:Math.random()*w.h,z:Math.random()*1.5+0.2})),
+      bullets: [], enemies: [], particles: [], pickups: [], enemyTimer: 1.2, spawnLeft: 0,
+      waveEnemies: wave,
+    };
+  }
 
-    let keys = {};
-    let score = 0;
+  useEffect(()=>{ resetState(); setDead(false); setScore(0); lastRef.current = 0; }, [wave, upgrades]);
 
-    class Player {
-      constructor() {
-        this.x = 100;
-        this.y = 300;
-        this.w = 40;
-        this.h = 40;
-        this.vy = 0;
-        this.jumpCount = 0;
-        this.dashing = false;
-        this.dashTime = 0;
-      }
-      update() {
-        if (this.dashing) {
-          this.dashTime--;
-          if (this.dashTime <= 0) this.dashing = false;
-        } else {
-          this.vy += 0.8;
-          this.y += this.vy;
-          if (this.y >= 300) {
-            this.y = 300;
-            this.vy = 0;
-            this.jumpCount = 0;
-          }
-        }
-      }
-      jump() {
-        if (this.jumpCount < 2) {
-          this.vy = -12;
-          this.jumpCount++;
-        }
-      }
-      dash() {
-        if (!this.dashing) {
-          this.dashing = true;
-          this.dashTime = 20;
-        }
-      }
-      draw() {
-        ctx.fillStyle = this.dashing ? "#ff0" : "#0ff";
-        ctx.fillRect(this.x, this.y, this.w, this.h);
-      }
+  function spawnEnemy(s, type='scout'){
+    const w = stateRef.current.w;
+    const x = (Math.random()*0.8 + 0.1) * w.w;
+    const y = -40;
+    if (type==='scout') stateRef.current.enemies.push({ x,y, vx:0, vy: 40+Math.random()*40, r:12, hp:1, type, col:'#fb7185', t:0 });
+    if (type==='kamikaze') stateRef.current.enemies.push({ x,y, vx:0, vy: 40, r:16, hp:2, type, col:'#f97316', t:0 });
+    if (type==='turret') stateRef.current.enemies.push({ x,y:40, vx:0, vy:0, r:18, hp:3, type, col:'#60a5fa', t:0, shootTimer:1.4 });
+  }
+
+  function emitParticles(x,y,n,spread,life,color){ for(let i=0;i<n;i++){ const a=(Math.random()-0.5)*spread; const s=60+Math.random()*140; stateRef.current.particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:life*(0.6+Math.random()*0.8),t:0,c:color}); }}
+
+  // Game loop
+  useEffect(()=>{
+    const loop = (ts)=>{
+      if (!lastRef.current) lastRef.current = ts;
+      const dt = Math.min(0.05, (ts - lastRef.current)/1000);
+      lastRef.current = ts;
+      if (!paused && !dead) update(dt);
+      render();
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return ()=> cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paused, dead]);
+
+  function update(dt){
+    const s = stateRef.current; s.tick += dt;
+    const p = s.player;
+    // movement input
+    let mx = 0, my = 0;
+    if (keys.current['KeyA'] || keys.current['ArrowLeft']) mx -= 1;
+    if (keys.current['KeyD'] || keys.current['ArrowRight']) mx += 1;
+    if (keys.current['KeyW'] || keys.current['ArrowUp']) my -= 1;
+    if (keys.current['KeyS'] || keys.current['ArrowDown']) my += 1;
+    const mlen = Math.hypot(mx,my) || 1;
+    p.vx = (mx/mlen)*p.speed; p.vy = (my/mlen)*p.speed;
+    p.x += p.vx*dt; p.y += p.vy*dt;
+    // clamp
+    p.x = Math.max(20, Math.min(s.w.w-20, p.x)); p.y = Math.max(20, Math.min(s.w.h-60, p.y));
+
+    // shooting toward mouse
+    p.fireCooldown = Math.max(0, p.fireCooldown - dt);
+    const isShooting = mouse.current.down;
+    if (isShooting && p.fireCooldown === 0){
+      p.fireCooldown = p.fireRate;
+      shootBullet(p.x, p.y, mouse.current.x, mouse.current.y, p.dmg, p.spread);
     }
 
-    class Obstacle {
-      constructor(x) {
-        this.x = x;
-        this.y = 330;
-        this.w = 30;
-        this.h = 30;
+    // bullets
+    s.bullets.forEach(b=>{ b.x += b.vx*dt; b.y += b.vy*dt; b.t += dt; });
+    s.bullets = s.bullets.filter(b => b.t < 3 && b.y > -50 && b.y < s.w.h + 50 && b.x > -50 && b.x < s.w.w +50);
+
+    // enemies
+    s.enemies.forEach((e,i)=>{
+      e.t += dt;
+      if (e.type === 'scout') { e.y += e.vy*dt; e.x += Math.sin(e.t*3)*20*dt; }
+      if (e.type === 'kamikaze') { const dx = p.x - e.x; const dy = p.y - e.y; const d = Math.hypot(dx,dy) || 1; e.vx += dx/d * 30 * dt; e.vy += dy/d * 30 * dt; e.x += e.vx*dt; e.y += e.vy*dt; }
+      if (e.type === 'turret') { e.shootTimer -= dt; if (e.shootTimer <= 0){ e.shootTimer = 1.4 - Math.min(1, wave*0.05); // faster later
+          const angle = Math.atan2(p.y - e.y, p.x - e.x); const sp = 180; s.bullets.push({x:e.x,y:e.y,vx:Math.cos(angle)*sp,vy:Math.sin(angle)*sp, t:0, friendly:false }); } }
+
+      // collide with player
+      if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + p.r){
+        if (p.shield > 0){ p.shield = Math.max(0, p.shield - 1); emitParticles(e.x,e.y,12,6,0.6,'#a3e635'); s.enemies.splice(i,1); }
+        else { p.hp -= 1; s.shake = 8; emitParticles(p.x,p.y,20,6,0.8,'#fb7185'); s.enemies.splice(i,1); if (p.hp <= 0) die(); }
       }
-      update() {
-        this.x -= 6;
-      }
-      draw() {
-        ctx.fillStyle = "#f0f";
-        ctx.fillRect(this.x, this.y, this.w, this.h);
-      }
-    }
-
-    const player = new Player();
-    const obstacles = [];
-
-    function loop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      player.update();
-      player.draw();
-
-      if (Math.random() < 0.02) {
-        obstacles.push(new Obstacle(canvas.width));
-      }
-
-      for (let i = obstacles.length - 1; i >= 0; i--) {
-        const o = obstacles[i];
-        o.update();
-        o.draw();
-        if (o.x + o.w < 0) {
-          obstacles.splice(i, 1);
-          score++;
-          scoreEl.textContent = score;
-        }
-        if (!player.dashing &&
-            player.x < o.x + o.w &&
-            player.x + player.w > o.x &&
-            player.y < o.y + o.h &&
-            player.y + player.h > o.y) {
-          alert("Game Over! Score: " + score);
-          document.location.reload();
-        }
-      }
-
-      requestAnimationFrame(loop);
-    }
-
-    document.addEventListener("keydown", e => {
-      if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") player.jump();
-      if (e.code === "ShiftLeft" || e.code === "KeyX") player.dash();
     });
 
-    document.getElementById("jumpBtn").addEventListener("touchstart", () => player.jump());
-    document.getElementById("dashBtn").addEventListener("touchstart", () => player.dash());
+    // bullets hit enemies
+    s.bullets.forEach((b, bi)=>{
+      if (b.friendly === false) return; // only player bullets
+      for (let i = s.enemies.length-1; i>=0; i--){ const e = s.enemies[i]; if (Math.hypot(b.x-e.x, b.y-e.y) < e.r + 4){ e.hp -= b.dmg; s.bullets.splice(bi,1); emitParticles(b.x,b.y,6,6,0.5,'#fde68a'); if (e.hp <= 0){ explodeEnemy(e); s.enemies.splice(i,1); setScore(sc=>sc+10); setCredits(c=>c+5); } break; } }
+    });
 
-    loop();
-  </script></body>
-</html>
+    // enemy bullets hit player
+    s.bullets.forEach((b, bi)=>{ if (b.friendly === false){ if (Math.hypot(b.x-p.x, b.y-p.y) < p.r + 4){ s.bullets.splice(bi,1); if (p.shield>0){ p.shield = Math.max(0,p.shield-1); emitParticles(p.x,p.y,8,6,0.5,'#a3e635'); } else { p.hp -= 1; s.shake = 8; emitParticles(p.x,p.y,14,6,0.6,'#fb7185'); if (p.hp <= 0) die(); } } } });
+
+    // particles
+    s.particles.forEach(pt=>{ pt.t += dt; pt.x += pt.vx*dt; pt.y += pt.vy*dt; pt.vx *= 0.99; pt.vy *= 0.99; });
+    s.particles = s.particles.filter(pt => pt.t < pt.life);
+
+    // spawn logic: spawn until waveEnemies depleted
+    s.enemyTimer -= dt; if (s.enemyTimer <= 0 && s.waveEnemies > 0){
+      s.enemyTimer = 0.3 + Math.random()*0.8 - Math.min(0.6, wave*0.02);
+      // choose type by wave
+      const r = Math.random();
+      if (r < 0.6) spawnEnemy(s, 'scout');
+      else if (r < 0.85) spawnEnemy(s, 'kamikaze');
+      else spawnEnemy(s, 'turret');
+      s.waveEnemies -= 1;
+    }
+
+    // when all spawned and cleared -> wave done
+    if (s.waveEnemies <= 0 && s.enemies.length === 0){ setShopOpen(true); }
+
+    // shake decay
+    s.shake = Math.max(0, s.shake - dt*30);
+  }
+
+  function shootBullet(sx, sy, tx, ty, dmg=1, spread=0){
+    const angle = Math.atan2(ty - sy, tx - sx) + (Math.random()-0.5)*spread*0.25;
+    const speed = 420;
+    stateRef.current.bullets.push({ x: sx + Math.cos(angle)*20, y: sy + Math.sin(angle)*20, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, t:0, friendly:true, dmg });
+    if (upgrades.spread > 0){ // extra projectiles
+      for (let i=0;i<upgrades.spread;i++){ const a = angle + (i+1)*0.12; stateRef.current.bullets.push({ x: sx, y: sy, vx: Math.cos(a)*speed, vy: Math.sin(a)*speed, t:0, friendly:true, dmg }); }
+    }
+    emitParticles(sx,sy,6,4,0.6,'#fff');
+  }
+
+  function explodeEnemy(e){ emitParticles(e.x,e.y,18,8,0.8,'#fb7185'); setScore(s=>s+5); setCredits(c=>c+3); }
+
+  function die(){ setDead(true); setHigh(h=>{ const nh = Math.max(h, score); localStorage.setItem('ss_high', String(nh)); return nh; }); localStorage.setItem('ss_credits', String(credits)); }
+
+  function render(){
+    const canvas = canvasRef.current; if (!canvas) return; const ctx = canvas.getContext('2d'); const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const vw = Math.min(900, Math.floor(window.innerWidth)); const vh = Math.min(520, Math.floor(window.innerHeight*0.75));
+    const cw = vw * dpr, ch = vh * dpr; if (canvas.width !== cw || canvas.height !== ch){ canvas.width = cw; canvas.height = ch; canvas.style.width = vw+'px'; canvas.style.height = vh+'px'; }
+    ctx.save(); ctx.scale(dpr,dpr);
+    const s = stateRef.current; if (!s) return; const w = s.w;
+
+    // background
+    ctx.fillStyle = '#030617'; ctx.fillRect(0,0,w.w,w.h);
+
+    // stars
+    s.stars.forEach(st=>{ st.y += st.z*10/60; if (st.y > w.h) st.y = 0; ctx.globalAlpha = 0.8*st.z; ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.floor(st.x), Math.floor(st.y), Math.max(1,st.z*2), Math.max(1,st.z*2)); }); ctx.globalAlpha = 1;
+
+    // apply screen shake
+    const ox = (Math.random()-0.5)*s.shake; const oy = (Math.random()-0.5)*s.shake;
+    ctx.translate(ox, oy);
+
+    // enemies
+    s.enemies.forEach(e=>{ ctx.fillStyle = e.col; ctx.beginPath(); ctx.arc(e.x, e.y, e.r,0,Math.PI*2); ctx.fill(); });
+
+    // bullets
+    s.bullets.forEach(b=>{ ctx.fillStyle = b.friendly? '#fde68a':'#fca5a5'; ctx.beginPath(); ctx.arc(b.x,b.y,3,0,Math.PI*2); ctx.fill(); });
+
+    // player
+    const p = s.player;
+    // shield halo
+    if (p.shield > 0){ ctx.strokeStyle = '#a3e635'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x,p.y,p.r+6,0,Math.PI*2); ctx.stroke(); }
+    // ship
+    ctx.fillStyle = '#60a5fa'; ctx.beginPath(); ctx.moveTo(p.x+12,p.y); ctx.lineTo(p.x-10,p.y-8); ctx.lineTo(p.x-6,p.y); ctx.lineTo(p.x-10,p.y+8); ctx.closePath(); ctx.fill();
+
+    // particles
+    s.particles.forEach(pt=>{ ctx.globalAlpha = 1 - pt.t/pt.life; ctx.fillStyle = pt.c; ctx.fillRect(pt.x,pt.y,2,2); }); ctx.globalAlpha = 1;
+
+    ctx.resetTransform(); ctx.scale(dpr,dpr);
+
+    // HUD
+    ctx.fillStyle = '#e6eef8'; ctx.font = '14px ui-sans-serif,system-ui'; ctx.fillText(`Score: ${score}`, 12, 22); ctx.fillText(`High: ${high}`, 12, 42); ctx.fillText(`Credits: ${credits}`, 12, 62); ctx.fillText(`Wave: ${wave}`, 12, 82);
+    ctx.fillText(`HP: ${p.hp}/${p.maxHp}  Shield: ${p.shield}`, w.w-220, 22);
+
+    if (paused){ ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,w.w,w.h); ctx.fillStyle = '#fff'; ctx.font='28px ui-sans-serif'; ctx.fillText('Paused', w.w/2-40, w.h/2); }
+    if (dead){ ctx.fillStyle = 'rgba(2,6,23,0.6)'; ctx.fillRect(0,0,w.w,w.h); ctx.fillStyle = '#fff'; ctx.font='28px ui-sans-serif'; ctx.fillText('You Died', w.w/2-60, w.h/2); ctx.font='16px ui-sans-serif'; ctx.fillText('Press R to restart or buy credits in the shop', w.w/2-170, w.h/2+30); }
+
+    // shop overlay
+    if (shopOpen){ ctx.fillStyle = 'rgba(2,6,23,0.75)'; ctx.fillRect(0,0,w.w,w.h); ctx.fillStyle = '#fff'; ctx.font='20px ui-sans-serif'; ctx.fillText('Wave Cleared! Shop Time', w.w/2-120, 80); ctx.font='14px ui-sans-serif'; ctx.fillText('Press buttons to buy upgrades, then press Continue', w.w/2-160, 110); }
+
+    ctx.restore();
+  }
+
+  // shop items
+  const shopItems = useMemo(()=>[
+    { key:'maxHP', label:'+1 Max HP', base:60, cap:4 },
+    { key:'dmg', label:'+1 Damage', base:80, cap:4 },
+    { key:'rapid', label:'Rapid Fire', base:90, cap:3 },
+    { key:'spread', label:'Extra Projectiles', base:100, cap:3 }
+  ], []);
+
+  function buyItem(it){ const lvl = upgrades[it.key]; if (lvl >= it.cap) return; const cost = Math.floor(it.base * Math.pow(1.6, lvl)); if (credits >= cost){ const nu = {...upgrades, [it.key]: lvl+1 }; setUpgrades(nu); localStorage.setItem(upgradesKey, JSON.stringify(nu)); setCredits(c=>{ const nc = c-cost; localStorage.setItem('ss_credits', String(nc)); return nc; }); } }
+
+  function continueWave(){ setShopOpen(false); setWave(w=>w+1); resetState(); }
+
+  // keyboard meta
+  useEffect(()=>{
+    const onKey = (e)=>{
+      if (e.code === 'KeyP') setPaused(p=>!p);
+      if (e.code === 'KeyR'){ if (dead){ setWave(1); setScore(0); setDead(false); setCredits(0); resetState(); } }
+    };
+    window.addEventListener('keydown', onKey); return ()=>window.removeEventListener('keydown', onKey);
+  }, [dead]);
+
+  // helpers for mobile controls (very simple)
+  const touchShoot = (e)=>{ const rect = canvasRef.current.getBoundingClientRect(); const t = e.touches[0]; mouse.current.x = t.clientX - rect.left; mouse.current.y = t.clientY - rect.top; mouse.current.down = true; setTimeout(()=>mouse.current.down=false, 120); };
+
+  // persist credits on change
+  useEffect(()=>{ localStorage.setItem('ss_credits', String(credits)); }, [credits]);
+
+  return (
+    <div className='w-full min-h-screen bg-[#060717] text-white flex flex-col items-center p-4 select-none'>
+      <div className='w-full max-w-3xl flex items-center justify-between mb-2'>
+        <h1 className='text-xl font-bold'>Stellar Smash</h1>
+        <div className='flex gap-2'>
+          <button onClick={()=>setPaused(p=>!p)} className='px-3 py-1 rounded-2xl bg-slate-800'> {paused? 'Resume':'Pause'} </button>
+          <button onClick={()=>{ setShopOpen(true); }} className='px-3 py-1 rounded-2xl bg-slate-800'>Shop</button>
+          <button onClick={()=>{ setWave(1); setScore(0); setDead(false); setCredits(0); resetState(); }} className='px-3 py-1 rounded-2xl bg-rose-600'>Restart</button>
+        </div>
+      </div>
+
+      <canvas ref={canvasRef} onTouchStart={touchShoot} className='rounded-xl shadow-lg border border-slate-800' />
+
+      <div className='mt-3 text-sm opacity-80'>Move: WASD • Aim: Mouse • Shoot: Click • P: Pause • R: Restart</div>
+
+      {/* Shop drawer */}
+      {shopOpen && (
+        <div className='fixed inset-0 bg-black/60 flex items-center justify-center z-50' onClick={()=>setShopOpen(false)}>
+          <div className='bg-[#081029] p-4 rounded-xl border border-slate-700 w-full max-w-md' onClick={(e)=>e.stopPropagation()}>
+            <div className='flex items-center justify-between mb-2'>
+              <h2 className='text-lg font-semibold'>Ship Upgrades</h2>
+              <button onClick={()=>setShopOpen(false)} className='px-2 py-1 bg-slate-800 rounded'>Close</button>
+            </div>
+            <div className='mb-2'>Credits: <span className='font-semibold'>{credits}</span></div>
+            <div className='space-y-2'>
+              {shopItems.map(it=>{ const lvl = upgrades[it.key] || 0; const cost = lvl>=it.cap? null : Math.floor(it.base * Math.pow(1.6, lvl)); return (
+                <div key={it.key} className='flex items-center justify-between bg-slate-800/30 p-3 rounded'>
+                  <div>
+                    <div className='font-medium'>{it.label}</div>
+                    <div className='text-xs opacity-80'>Level {lvl} / {it.cap}</div>
+                  </div>
+                  <div>
+                    <button disabled={lvl>=it.cap || credits < (cost||0)} onClick={()=>buyItem(it)} className={`px-3 py-1 rounded ${lvl>=it.cap? 'bg-slate-700':'bg-sky-600'}`}>{lvl>=it.cap? 'Maxed': `Buy (${cost})`}</button>
+                  </div>
+                </div>
+              ) })}
+            </div>
+            <div className='flex items-center justify-between mt-3'>
+              <button onClick={()=>{ setCredits(c=>c+50); }} className='px-3 py-1 bg-emerald-600 rounded'>Cheat +50</button>
+              <button onClick={()=>{ setShopOpen(false); setWave(w=>w+1); resetState(); }} className='px-3 py-1 bg-sky-700 rounded'>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className='mt-3 text-xs opacity-70 max-w-3xl text-center'>Tip: use movement to dodge kamikazes, shoot turrets quickly, and spend credits between waves to become stronger. Upgrades persist on this device.</div>
+    </div>
+  );
+}
+
