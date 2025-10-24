@@ -1,252 +1,541 @@
-import React, { useEffect, useRef, useState } from 'react';
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Dungeon Drift — Roguelike (Standalone)</title>
+<style>
+  :root{ --bg:#071126; --panel:#081827; --text:#e6eef8; --muted:#9fb0c8; --accent:#60a5fa; }
+  html,body{ height:100%; margin:0; font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial; background:linear-gradient(180deg,#041024 0%, #071126 100%); color:var(--text); -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;}
+  .wrap{ max-width:980px; margin:18px auto; padding:14px; }
+  header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;}
+  h1{ margin:0; font-size:20px; letter-spacing:0.2px; }
+  .controls{ display:flex; gap:8px; align-items:center; }
+  button{ background:var(--panel); color:var(--text); border:1px solid rgba(255,255,255,0.04); padding:8px 10px; border-radius:10px; cursor:pointer;}
+  button.small{ padding:6px 8px; font-size:13px; }
+  .board-wrap{ background:rgba(255,255,255,0.02); padding:10px; border-radius:12px; display:flex; gap:12px; align-items:flex-start; }
+  canvas{ image-rendering:pixelated; display:block; border-radius:6px; background:#001; }
+  .sidebar{ width:320px; min-width:220px; color:var(--muted); font-size:13px; }
+  .hud { margin-bottom:10px; }
+  .msg{ font-size:13px; color:var(--text); min-height:78px; background:rgba(255,255,255,0.01); padding:10px; border-radius:8px; margin-bottom:10px; overflow:auto; }
+  .small{ font-size:12px; color:var(--muted); }
+  .dead{ margin-top:8px; padding:10px; background:rgba(255,0,0,0.06); border-radius:8px; color:#ffd6d6; }
+  footer{ margin-top:12px; color:var(--muted); font-size:12px; text-align:center; }
+  @media (max-width:820px){ .wrap{ padding:8px; } .board-wrap{flex-direction:column; align-items:center;} .sidebar{ width:100%; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Dungeon Drift — Roguelike</h1>
+      <div class="controls">
+        <button id="newSeed" class="small" title="Regenerate with new seed">New Seed</button>
+        <button id="restart" class="small" title="Restart run">Restart</button>
+        <button id="download" class="small" title="Download map as PNG">Save Map</button>
+      </div>
+    </header>
 
-// Dungeon Drift — single-file roguelike demo (React + Canvas)
-// Features:
-// - Procedural dungeon generation (random walk + rooms)
-// - Turn-based movement (arrow keys / WASD)
-// - Enemies that chase the player (simple pathing)
-// - Items (potions, weapons, armor) and inventory (use with I)
-// - XP, leveling, stat increases
-// - Permadeath with high score (depth reached) persisted to localStorage
-// - Small UI + keyboard controls
+    <div class="board-wrap">
+      <div>
+        <canvas id="gameCanvas"></canvas>
+      </div>
 
-export default function DungeonDrift(){
-  const canvasRef = useRef(null);
-  const [seed, setSeed] = useState(() => Math.floor(Math.random()*1e9));
-  const rngRef = useRef(() => Math.random());
-  const mapRef = useRef(null);
-  const stateRef = useRef(null);
-  const [msg, setMsg] = useState('Welcome to Dungeon Drift — press Arrow keys or WASD to move. Press I to open inventory.');
-  const [turn, setTurn] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-  const [depth, setDepth] = useState(1);
-  const [bestDepth, setBestDepth] = useState(() => Number(localStorage.getItem('dd_best')) || 1);
+      <div class="sidebar">
+        <div class="hud">
+          <div><strong id="depthLabel">Depth: 1</strong></div>
+          <div class="small" id="statsLabel">HP: 10/10 • ATK: 3 • DEF: 0 • LVL: 1 XP: 0</div>
+          <div style="height:6px"></div>
+        </div>
 
-  // Simple seeded RNG (mulberry32)
-  function setSeeded(s){ let t = s >>> 0; rngRef.current = () => { t += 0x6D2B79F5; let r = Math.imul(t ^ t>>>15, 1 | t); r ^= r + Math.imul(r ^ r>>>7, 61 | r); return ((r ^ r>>>14) >>> 0) / 4294967296; }; }
-  useEffect(()=>{ setSeeded(seed); newRun(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [seed]);
+        <div class="msg" id="messages" aria-live="polite"></div>
 
-  // Map generation: grid with random rooms + drunkard carve tunnels
-  function generateMap(w = 45, h = 31){
-    const rng = rngRef.current;
-    const map = new Array(h).fill(0).map(()=>new Array(w).fill('#'));
+        <div class="small" style="margin-top:10px">
+          Controls: Arrow keys or WASD to move. G pick up items on tile. I inspect nearby items. R restart.  
+          Descend stairs to go deeper. Permadeath is on.
+        </div>
 
-    // carve a few random rectangular rooms
-    const roomCount = 6 + Math.floor(rng()*6);
-    const rooms = [];
-    for (let r=0;r<roomCount;r++){
-      const rw = 4 + Math.floor(rng()*8);
-      const rh = 3 + Math.floor(rng()*6);
-      const rx = 2 + Math.floor(rng()*(w-rw-4));
-      const ry = 2 + Math.floor(rng()*(h-rh-4));
-      for(let y=ry;y<ry+rh;y++) for(let x=rx;x<rx+rw;x++) map[y][x] = '.';
-      rooms.push({x:rx,y:ry,w:rw,h:rh});
-    }
+        <div id="deadPanel" style="display:none" class="dead">
+          <div><strong>You died</strong></div>
+          <div id="deadInfo"></div>
+          <div style="height:8px"></div>
+          <button id="tryAgain">Try Again</button>
+        </div>
+      </div>
+    </div>
 
-    // connect rooms with drunkard walker
-    function carveLine(ax,ay,bx,by){ let x=ax,y=ay; while(x!==bx||y!==by){ map[y][x]='.'; if (rng()<0.5) x += Math.sign(bx-x); else y += Math.sign(by-y); } map[by][bx]='.'; }
-    for (let i=1;i<rooms.length;i++){ const a = rooms[i-1]; const b = rooms[i]; const ax = a.x + Math.floor(a.w/2); const ay = a.y + Math.floor(a.h/2); const bx = b.x + Math.floor(b.w/2); const by = b.y + Math.floor(b.h/2); carveLine(ax,ay,bx,by); }
+    <footer>Built for instant use — save this file and open it in your browser to play.</footer>
+  </div>
 
-    // fill with sparse tunnels
-    let walkers = 800 + Math.floor(rng()*300);
-    let cx = Math.floor(w/2), cy = Math.floor(h/2);
-    while(walkers-- > 0){ map[cy][cx]='.'; const d = Math.floor(rng()*4); if (d===0) cx = Math.min(w-2, cx+1); if (d===1) cx = Math.max(1, cx-1); if (d===2) cy = Math.min(h-2, cy+1); if (d===3) cy = Math.max(1, cy-1); }
+<script>
+/* Dungeon Drift — standalone HTML+JS roguelike
+   - Procedural dungeon (rooms + tunnels)
+   - Turn-based movement
+   - Enemies chase player, items, stairs
+   - XP, leveling, permadeath
+*/
 
-    // make border walls
-    for(let y=0;y<h;y++){ map[y][0]='#'; map[y][w-1]='#'; }
-    for(let x=0;x<w;x++){ map[0][x]='#'; map[h-1][x]='#'; }
+/* ----- Utilities ----- */
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function() {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ t >>> 15, 1 | t);
+    r ^= r + Math.imul(r ^ r >>> 7, 61 | r);
+    return ((r ^ r >>> 14) >>> 0) / 4294967296;
+  };
+}
+function randInt(rng, a, b){ return a + Math.floor(rng() * (b - a + 1)); }
 
-    return { map, w, h, rooms };
+/* ----- Game state ----- */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let state = null;
+let seed = Math.floor(Math.random()*1e9);
+let rng = mulberry32(seed);
+let tile = 18;                // pixel size per tile (will scale to fit)
+let viewPadding = 0;
+let bestDepth = Number(localStorage.getItem('dd_best') || 1);
+
+const messagesEl = document.getElementById('messages');
+const depthLabel = document.getElementById('depthLabel');
+const statsLabel = document.getElementById('statsLabel');
+const deadPanel = document.getElementById('deadPanel');
+const deadInfo = document.getElementById('deadInfo');
+
+function pushMsg(text){
+  const s = state;
+  if (!s) return;
+  s.messages.push(text);
+  if (s.messages.length > 12) s.messages.shift();
+  messagesEl.innerText = s.messages.slice(-8).join('\\n');
+}
+
+/* ----- Map generation ----- */
+function generateMap(w = 45, h = 31){
+  const map = new Array(h).fill(0).map(()=>new Array(w).fill('#'));
+  const rooms = [];
+  const rngLocal = rng;
+
+  // Carve rectangular rooms
+  const roomCount = 6 + Math.floor(rngLocal()*6);
+  for (let i=0;i<roomCount;i++){
+    const rw = 4 + Math.floor(rngLocal()*8);
+    const rh = 3 + Math.floor(rngLocal()*6);
+    const rx = 2 + Math.floor(rngLocal()*(w-rw-4));
+    const ry = 2 + Math.floor(rngLocal()*(h-rh-4));
+    for (let yy=ry; yy<ry+rh; yy++) for (let xx=rx; xx<rx+rw; xx++) map[yy][xx] = '.';
+    rooms.push({x:rx, y:ry, w:rw, h:rh});
   }
 
-  // New run or new floor
-  function newRun(){
-    setGameOver(false);
-    setDepth(1);
-    setMsg('Descend the dungeon. Use I to manage inventory.');
-    const M = generateMap();
-    mapRef.current = M;
-    // initial state
-    const rng = rngRef.current;
-    const spawnRoom = M.rooms[Math.floor(rng()*M.rooms.length)];
-    const px = spawnRoom.x + Math.floor(spawnRoom.w/2);
-    const py = spawnRoom.y + Math.floor(spawnRoom.h/2);
-    const player = { x: px, y: py, hp: 10, maxHp: 10, atk: 3, def: 0, xp: 0, lvl: 1 };
+  // Connect rooms with simple tunnels
+  function carveLine(ax,ay,bx,by){
+    let x=ax, y=ay;
+    while (x!==bx || y!==by){
+      map[y][x] = '.';
+      if (rngLocal() < 0.5) x += Math.sign(bx-x);
+      else y += Math.sign(by-y);
+    }
+    map[by][bx] = '.';
+  }
+  for (let i=1;i<rooms.length;i++){
+    const a = rooms[i-1], b = rooms[i];
+    const ax = a.x + Math.floor(a.w/2), ay = a.y + Math.floor(a.h/2);
+    const bx = b.x + Math.floor(b.w/2), by = b.y + Math.floor(b.h/2);
+    carveLine(ax,ay,bx,by);
+  }
 
-    const enemies = [];
-    // place some enemies
-    const enemyCount = 6 + Math.floor(rng()*6);
-    for(let i=0;i<enemyCount;i++){
-      const r = M.rooms[Math.floor(rng()*M.rooms.length)];
+  // Random tunnels (drunkard walker)
+  let walkers = 700 + Math.floor(rngLocal()*300);
+  let cx = Math.floor(w/2), cy = Math.floor(h/2);
+  while (walkers-- > 0){
+    map[cy][cx] = '.';
+    const d = Math.floor(rngLocal()*4);
+    if (d===0) cx = Math.min(w-2, cx+1);
+    if (d===1) cx = Math.max(1, cx-1);
+    if (d===2) cy = Math.min(h-2, cy+1);
+    if (d===3) cy = Math.max(1, cy-1);
+  }
+
+  // border walls
+  for (let y=0;y<h;y++){ map[y][0]='#'; map[y][w-1]='#'; }
+  for (let x=0;x<w;x++){ map[0][x]='#'; map[h-1][x]='#'; }
+
+  return { map, w, h, rooms };
+}
+
+/* ----- New run / Floor ----- */
+function newRun(){
+  dieCleanup();
+  state = {};
+  rng = mulberry32(seed);
+  const M = generateMap();
+  state.map = M.map;
+  state.w = M.w; state.h = M.h; state.rooms = M.rooms;
+  // place player in first room center
+  const spawn = state.rooms[0];
+  const px = spawn.x + Math.floor(spawn.w/2);
+  const py = spawn.y + Math.floor(spawn.h/2);
+  state.player = { x: px, y: py, hp: 10, maxHp: 10, atk: 3, def: 0, xp: 0, lvl: 1};
+  // enemies
+  state.enemies = [];
+  const enemyCount = 6 + Math.floor(rng()*6);
+  for (let i=0;i<enemyCount;i++){
+    const r = state.rooms[Math.floor(rng()*state.rooms.length)];
+    const ex = r.x + Math.floor(r.w * rng());
+    const ey = r.y + Math.floor(r.h * rng());
+    if (state.map[ey][ex] === '.' && (ex !== px || ey !== py)){
+      state.enemies.push({ x: ex, y: ey, hp: 4 + Math.floor(rng()*4), atk: 2, def: 0 });
+    }
+  }
+  // items
+  state.items = [];
+  const itemTypes = ['potion','sword','leather','ring'];
+  for (let i=0;i<8;i++){
+    const r = state.rooms[Math.floor(rng()*state.rooms.length)];
+    const ix = r.x + Math.floor(r.w * rng());
+    const iy = r.y + Math.floor(r.h * rng());
+    if (state.map[iy][ix] === '.' && (ix !== px || iy !== py)){
+      state.items.push({ x: ix, y: iy, type: itemTypes[Math.floor(rng()*itemTypes.length)] });
+    }
+  }
+  // stairs in last room
+  const lastRoom = state.rooms[state.rooms.length-1];
+  state.stairs = { x: lastRoom.x + Math.floor(lastRoom.w/2), y: lastRoom.y + Math.floor(lastRoom.h/2) };
+  state.messages = [];
+  state.depth = 1;
+  state.turn = 0;
+  pushMsg('Welcome to Dungeon Drift — descend the stairs to go deeper.');
+  resizeCanvas();
+  draw();
+  updateUI();
+}
+
+/* ----- Draw ----- */
+function resizeCanvas(){
+  // scale canvas to preserve tile size and fit available viewport reasonably
+  const maxWidth = Math.min(window.innerWidth - 380, 820);
+  const canvasW = Math.min(maxWidth, state.w * tile);
+  // choose tile size to fit if screen small
+  let scale = 1;
+  if (state.w * tile > canvasW){
+    scale = Math.floor(canvasW / state.w / 1); if (scale < 1) scale = 1;
+  }
+  const usedTile = Math.max(10, Math.floor(tile * scale));
+  canvas.width = state.w * usedTile;
+  canvas.height = state.h * usedTile;
+  canvas.style.width = canvas.width + 'px';
+  canvas.style.height = canvas.height + 'px';
+  canvas._tile = usedTile;
+}
+
+function draw(){
+  if (!state) return;
+  const t = canvas._tile || tile;
+  const map = state.map;
+  ctx.fillStyle = '#071126'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // tiles
+  for (let y=0;y<state.h;y++){
+    for (let x=0;x<state.w;x++){
+      const ch = map[y][x];
+      const px = x * t, py = y * t;
+      if (ch === '#'){
+        ctx.fillStyle = '#253341';
+        ctx.fillRect(px,py,t,t);
+        // subtle stones
+        if ((x+y)%7 === 0){
+          ctx.fillStyle = 'rgba(0,0,0,0.06)';
+          ctx.fillRect(px+2, py+2, 3, 3);
+        }
+      } else {
+        ctx.fillStyle = '#071a2b';
+        ctx.fillRect(px,py,t,t);
+      }
+    }
+  }
+
+  // items
+  state.items.forEach(it=>{
+    const px = it.x * t, py = it.y * t;
+    if (it.type === 'potion') ctx.fillStyle = '#f97316';
+    else if (it.type === 'sword') ctx.fillStyle = '#94a3b8';
+    else if (it.type === 'leather') ctx.fillStyle = '#f59e0b';
+    else ctx.fillStyle = '#60a5fa';
+    ctx.fillRect(px + t*0.15, py + t*0.15, t*0.7, t*0.7);
+  });
+
+  // stairs
+  ctx.fillStyle = '#c084fc';
+  ctx.fillRect(state.stairs.x * t + t*0.12, state.stairs.y * t + t*0.12, t*0.76, t*0.76);
+
+  // enemies
+  state.enemies.forEach(e=>{
+    const px = e.x * t + t/2, py = e.y * t + t/2;
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath(); ctx.arc(px,py, Math.max(4, t*0.42), 0, Math.PI*2); ctx.fill();
+  });
+
+  // player
+  const p = state.player;
+  const px = p.x * t + t/2, py = p.y * t + t/2;
+  ctx.fillStyle = '#60a5fa';
+  ctx.beginPath(); ctx.arc(px,py, Math.max(4, t*0.42), 0, Math.PI*2); ctx.fill();
+
+  // HUD overlays
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(6,6, 260, 44);
+  ctx.fillStyle = '#e6eef8';
+  ctx.font = (Math.max(12, Math.floor(t*0.6))) + 'px ui-sans-serif';
+  ctx.fillText(`Depth: ${state.depth}   HP: ${p.hp}/${p.maxHp}   ATK:${p.atk} DEF:${p.def}`, 12, 28);
+  ctx.fillStyle = '#9fb0c8';
+  ctx.fillText(`LVL:${p.lvl} XP:${p.xp}   Best:${bestDepth}`, 12, 44);
+
+  // messages box handled by DOM
+}
+
+/* ----- Turn / Actions ----- */
+function findEnemyAt(x,y){
+  return state.enemies.findIndex(e => e.x === x && e.y === y);
+}
+function findItemAt(x,y){
+  return state.items.findIndex(it => it.x === x && it.y === y);
+}
+
+function playerMove(dx, dy){
+  if (!state || state.dead) return;
+  const nx = state.player.x + dx;
+  const ny = state.player.y + dy;
+  if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) return;
+  const tileChar = state.map[ny][nx];
+  if (tileChar === '#'){ pushMsg('You bump into a wall.'); return; }
+  const enemyIndex = findEnemyAt(nx, ny);
+  if (enemyIndex >= 0){ attackEnemy(enemyIndex); return; }
+  // move
+  state.player.x = nx; state.player.y = ny;
+  // pick up automatically? we'll leave manual pick-up with G
+  const itemIdx = findItemAt(nx, ny);
+  if (itemIdx >= 0){
+    // notify but don't auto-equip; G to pick up
+    pushMsg('There is something here: ' + state.items[itemIdx].type + ' (press G to pick up).');
+  }
+  if (state.stairs.x === nx && state.stairs.y === ny){
+    descendFloor();
+    return;
+  }
+  state.turn++;
+  enemyTurn();
+  draw();
+}
+
+function attackEnemy(index){
+  const e = state.enemies[index];
+  const dmg = Math.max(1, state.player.atk - e.def);
+  e.hp -= dmg;
+  pushMsg(`You hit an enemy for ${dmg} damage.`);
+  if (e.hp <= 0){
+    pushMsg('Enemy dies. +XP.');
+    state.player.xp += 4;
+    state.enemies.splice(index,1);
+    checkLevel();
+  } else {
+    // enemy retaliates
+    const edmg = Math.max(1, e.atk - state.player.def);
+    state.player.hp -= edmg;
+    pushMsg(`Enemy strikes back for ${edmg}.`);
+    if (state.player.hp <= 0) playerDies();
+  }
+  state.turn++;
+  enemyTurn();
+  draw();
+}
+
+function pickUpHere(){
+  const idx = findItemAt(state.player.x, state.player.y);
+  if (idx < 0){ pushMsg('Nothing to pick up here.'); return; }
+  const it = state.items[idx];
+  if (it.type === 'potion'){ state.player.hp = Math.min(state.player.maxHp, state.player.hp + 6); pushMsg('You drink a potion and feel better.'); }
+  else if (it.type === 'sword'){ state.player.atk += 1; pushMsg('You equip a sword. ATK increased.'); }
+  else if (it.type === 'leather'){ state.player.def += 1; pushMsg('You wear leather armor. DEF increased.'); }
+  else if (it.type === 'ring'){ state.player.maxHp += 2; state.player.hp += 2; pushMsg('A ring boosts your vitality.'); }
+  state.items.splice(idx,1);
+  draw();
+}
+
+function descendFloor(){
+  pushMsg('You descend the stairs deeper...');
+  // preserve player stats, heal small fraction, bump seed
+  const prev = state.player;
+  const saved = { lvl: prev.lvl, xp: prev.xp, atk: prev.atk, def: prev.def, maxHp: prev.maxHp, hp: Math.min(prev.maxHp, prev.hp + Math.floor(prev.maxHp*0.4)) };
+  seed = (seed + Math.floor(Math.random()*9999)) >>> 0;
+  // regenerate new map & restore player after small delay (to allow RNG to change)
+  setTimeout(()=>{
+    rng = mulberry32(seed);
+    const M = generateMap();
+    state.map = M.map; state.w = M.w; state.h = M.h; state.rooms = M.rooms;
+    // place player at center of first room
+    const spawn = state.rooms[0];
+    state.player.x = spawn.x + Math.floor(spawn.w/2);
+    state.player.y = spawn.y + Math.floor(spawn.h/2);
+    // new enemies/items
+    state.enemies = [];
+    const enemyCount = 6 + Math.floor(rng()*6) + state.depth; // scale with depth
+    for (let i=0;i<enemyCount;i++){
+      const r = state.rooms[Math.floor(rng()*state.rooms.length)];
       const ex = r.x + Math.floor(r.w * rng());
       const ey = r.y + Math.floor(r.h * rng());
-      if (M.map[ey][ex] === '.' && (ex!==px || ey!==py)) enemies.push({ x: ex, y: ey, hp: 4 + Math.floor(rng()*4), atk: 2, def: 0, id: i });
+      if (state.map[ey][ex] === '.' && (ex !== state.player.x || ey !== state.player.y)){
+        const hp = 4 + Math.floor(rng()*4) + Math.floor(state.depth/2);
+        const atk = 2 + Math.floor(state.depth/3);
+        state.enemies.push({ x: ex, y: ey, hp: hp, atk: atk, def: 0 });
+      }
     }
-
-    const items = [];
+    state.items = [];
     const itemTypes = ['potion','sword','leather','ring'];
-    for(let i=0;i<8;i++){ const r = M.rooms[Math.floor(rng()*M.rooms.length)]; const ix = r.x + Math.floor(r.w * rng()); const iy = r.y + Math.floor(r.h * rng()); if (M.map[iy][ix] === '.' && (ix!==px || iy!==py)) items.push({x:ix,y:iy,type:itemTypes[Math.floor(rng()*itemTypes.length)],id:i}); }
-
-    // stairs down
-    const stairRoom = M.rooms[M.rooms.length-1];
-    const stairs = { x: stairRoom.x + Math.floor(stairRoom.w/2), y: stairRoom.y + Math.floor(stairRoom.h/2) };
-
-    stateRef.current = { player, enemies, items, stairs, messages: [], seed, rng: rngRef.current, map: M.map, w: M.w, h: M.h };
-    draw();
-  }
-
-  // Draw map to canvas
-  function draw(){
-    const s = stateRef.current; if (!s) return; const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext('2d'); const tile = 18; const vw = s.w * tile; const vh = s.h * tile; canvas.width = vw; canvas.height = vh; canvas.style.width = vw + 'px'; canvas.style.height = vh + 'px';
-
-    // background
-    ctx.fillStyle = '#0b1220'; ctx.fillRect(0,0,vw,vh);
-
-    // tiles
-    for(let y=0;y<s.h;y++) for(let x=0;x<s.w;x++){
-      const ch = s.map[y][x]; const px = x*tile, py = y*tile;
-      if (ch === '#'){ ctx.fillStyle = '#253341'; ctx.fillRect(px,py,tile,tile); }
-      else { ctx.fillStyle = '#07132a'; ctx.fillRect(px,py,tile,tile); }
-    }
-
-    // items
-    s.items.forEach(it => {
-      ctx.fillStyle = it.type === 'potion' ? '#f97316' : it.type === 'sword' ? '#94a3b8' : it.type === 'leather' ? '#f59e0b' : '#60a5fa';
-      ctx.fillRect(it.x*tile + 4, it.y*tile + 4, tile-8, tile-8);
-    });
-
-    // stairs
-    ctx.fillStyle = '#c084fc'; ctx.fillRect(s.stairs.x*tile + 2, s.stairs.y*tile + 2, tile-4, tile-4);
-
-    // enemies
-    s.enemies.forEach(e => { ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(e.x*tile+tile/2, e.y*tile+tile/2, tile/2-2,0,Math.PI*2); ctx.fill(); });
-
-    // player
-    const p = s.player; ctx.fillStyle = '#60a5fa'; ctx.beginPath(); ctx.arc(p.x*tile+tile/2, p.y*tile+tile/2, tile/2-2,0,Math.PI*2); ctx.fill();
-
-    // HUD
-    ctx.fillStyle = '#e6eef8'; ctx.font = '14px ui-sans-serif'; ctx.fillText(`Depth: ${depth}  HP: ${p.hp}/${p.maxHp}  ATK:${p.atk} DEF:${p.def}  LVL:${p.lvl} XP:${p.xp}`, 8, 14);
-    ctx.fillText(`Best Depth: ${bestDepth}`, 8, 30);
-
-    // messages
-    const msgs = stateRef.current.messages.slice(-4);
-    ctx.fillStyle = '#fff'; ctx.font = '12px ui-sans-serif'; for(let i=0;i<msgs.length;i++){ ctx.fillText(msgs[i], 8, s.h*tile - 8 - (msgs.length-i-1)*14); }
-  }
-
-  // Player turn processing
-  function playerMove(dx, dy){ if (gameOver) return; const s = stateRef.current; const nx = s.player.x + dx; const ny = s.player.y + dy; if (nx <0 || nx>=s.w || ny<0 || ny>=s.h) return; const tile = s.map[ny][nx]; if (tile === '#'){ pushMsg('You bump into a wall.'); return; }
-    // check for enemy
-    const enIndex = s.enemies.findIndex(e => e.x === nx && e.y === ny);
-    if (enIndex >= 0){ attackEnemy(enIndex); return; }
-    // move to tile
-    s.player.x = nx; s.player.y = ny; // pickup
-    const itemIndex = s.items.findIndex(it => it.x === nx && it.y === ny);
-    if (itemIndex >= 0){ const it = s.items[itemIndex]; pickUpItem(it); s.items.splice(itemIndex,1); }
-    // stairs
-    if (s.stairs.x === nx && s.stairs.y === ny){ descendFloor(); }
-    // after player move, enemies act
-    setTurn(t => t+1);
-    enemyTurn(); draw(); }
-
-  function attackEnemy(index){ const s = stateRef.current; const e = s.enemies[index]; const dmg = Math.max(1, s.player.atk - e.def);
-    e.hp -= dmg; pushMsg(`You hit the ${e.type||'enemy'} for ${dmg}.`);
-    if (e.hp <= 0){ pushMsg('Enemy dies.'); // award xp
-      s.player.xp += 4; s.enemies.splice(index,1); checkLevel();
-    }
-    // enemy retaliates if alive
-    else { const edmg = Math.max(1, e.atk - s.player.def); s.player.hp -= edmg; pushMsg(`Enemy strikes back for ${edmg}.`); if (s.player.hp <= 0) playerDies(); }
-    setTurn(t => t+1);
-    enemyTurn(); draw(); }
-
-  function pickUpItem(item){ const s = stateRef.current; if (item.type === 'potion'){ s.player.hp = Math.min(s.player.maxHp, s.player.hp + 6); pushMsg('You drink a potion and heal.'); }
-    else if (item.type === 'sword'){ s.player.atk += 1; pushMsg('You equip a sword. ATK increased.'); }
-    else if (item.type === 'leather'){ s.player.def += 1; pushMsg('You wear leather armor. DEF increased.'); }
-    else if (item.type === 'ring'){ s.player.maxHp += 2; s.player.hp += 2; pushMsg('A strange ring bolsters your vitality.'); }
-  }
-
-  function enemyTurn(){ const s = stateRef.current; // simple chase: move 1 step toward player if distance < 10
-    for(let i=0;i<s.enemies.length;i++){ const e = s.enemies[i]; const dx = stateRef.current.player.x - e.x; const dy = stateRef.current.player.y - e.y; const dist = Math.abs(dx) + Math.abs(dy);
-      if (dist <= 12){ // attempt to move closer
-        const mov = Math.abs(dx) > Math.abs(dy) ? (dx>0? [1,0] : [-1,0]) : (dy>0? [0,1] : [0,-1]);
-        const nx = e.x + mov[0], ny = e.y + mov[1]; if (nx === stateRef.current.player.x && ny === stateRef.current.player.y){ // attack
-          const dmg = Math.max(1, e.atk - stateRef.current.player.def); stateRef.current.player.hp -= dmg; pushMsg(`Enemy hits you for ${dmg}.`); if (stateRef.current.player.hp <= 0) playerDies(); }
-        else if (stateRef.current.map[ny][nx] === '.' && !stateRef.current.enemies.some(en=>en.x===nx && en.y===ny)) { e.x = nx; e.y = ny; }
-      } else {
-        // random wander
-        if (Math.random() < 0.05){ const dirs = [[1,0],[-1,0],[0,1],[0,-1]]; const r = dirs[Math.floor(Math.random()*4)]; const nx = e.x + r[0], ny = e.y + r[1]; if (stateRef.current.map[ny][nx] === '.' && !stateRef.current.enemies.some(en=>en.x===nx && en.y===ny)) { e.x = nx; e.y = ny; } }
+    for (let i=0;i<8;i++){
+      const r = state.rooms[Math.floor(rng()*state.rooms.length)];
+      const ix = r.x + Math.floor(r.w * rng());
+      const iy = r.y + Math.floor(r.h * rng());
+      if (state.map[iy][ix] === '.' && (ix !== state.player.x || iy !== state.player.y)){
+        state.items.push({ x: ix, y: iy, type: itemTypes[Math.floor(rng()*itemTypes.length)] });
       }
     }
-  }
-
-  function checkLevel(){ const s = stateRef.current; const needed = s.player.lvl * 6; if (s.player.xp >= needed){ s.player.xp -= needed; s.player.lvl += 1; s.player.maxHp += 2; s.player.atk += 1; s.player.hp = s.player.maxHp; pushMsg(`You reach level ${s.player.lvl}! Stats improved.`); } }
-
-  function playerDies(){ pushMsg('You died...'); setGameOver(true); if (depth > bestDepth){ setBestDepth(depth); localStorage.setItem('dd_best', String(depth)); } }
-
-  function descendFloor(){ pushMsg('You descend deeper...'); setDepth(d => d+1); // regenerate map with same player xp/level
-    // keep player stats, but heal a bit
-    const prev = stateRef.current.player; const saved = { lvl: prev.lvl, xp: prev.xp, atk: prev.atk, def: prev.def, maxHp: prev.maxHp, hp: Math.min(prev.maxHp, prev.hp + Math.floor(prev.maxHp*0.4)) };
-    // new seed tweak
-    const newSeed = (seed + Math.floor(Math.random()*9999)) >>> 0; setSeed(newSeed);
-    // after setSeed triggers newRun, we must restore player with saved state — so use timeout
-    setTimeout(()=>{ const s = stateRef.current; if (!s) return; s.player.lvl = saved.lvl; s.player.xp = saved.xp; s.player.atk = saved.atk; s.player.def = saved.def; s.player.maxHp = saved.maxHp; s.player.hp = saved.hp; draw(); }, 60);
-  }
-
-  function pushMsg(t){ const s = stateRef.current; if (!s) return; s.messages.push(t); if (s.messages.length > 12) s.messages.shift(); setMsg(t); }
-
-  // Keyboard controls
-  useEffect(()=>{
-    const onKey = (e) => {
-      if (['ArrowUp','KeyW'].includes(e.code)){ playerMove(0,-1); }
-      if (['ArrowDown','KeyS'].includes(e.code)){ playerMove(0,1); }
-      if (['ArrowLeft','KeyA'].includes(e.code)){ playerMove(-1,0); }
-      if (['ArrowRight','KeyD'].includes(e.code)){ playerMove(1,0); }
-      if (e.code === 'KeyI'){ // inventory quick display: list items nearby and stats
-        const s = stateRef.current; const itemsHere = s.items.filter(it => Math.abs(it.x - s.player.x) + Math.abs(it.y - s.player.y) <= 3);
-        if (itemsHere.length === 0) pushMsg('No items nearby.'); else pushMsg('Nearby items: ' + itemsHere.map(it=>it.type).join(', '));
-      }
-      if (e.code === 'KeyR'){ // restart
-        setSeed(Math.floor(Math.random()*1e9)); setBestDepth(b=>b); newRun(); }
-      if (e.code === 'KeyG'){ // pick up everything on tile
-        const s = stateRef.current; const idx = s.items.findIndex(it => it.x === s.player.x && it.y === s.player.y); if (idx >= 0){ pickUpItem(s.items[idx]); s.items.splice(idx,1); draw(); } else pushMsg('Nothing to pick up here.'); }
-    };
-    window.addEventListener('keydown', onKey); return ()=>window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameOver, depth]);
-
-  // initial draw
-  useEffect(()=>{ draw(); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turn, msg, gameOver]);
-
-  // small responsive container
-  return (
-    <div className='w-full min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-4 select-none'>
-      <div className='w-full max-w-3xl flex items-center justify-between mb-2'>
-        <h1 className='text-xl font-bold'>Dungeon Drift</h1>
-        <div className='flex items-center gap-2'>
-          <button onClick={()=>{ setSeed(Math.floor(Math.random()*1e9)); }} className='px-3 py-1 rounded bg-slate-800'>New Seed</button>
-          <button onClick={()=>{ newRun(); }} className='px-3 py-1 rounded bg-emerald-700'>Restart Run</button>
-        </div>
-      </div>
-
-      <div className='bg-black/60 p-2 rounded shadow-lg'>
-        <canvas ref={canvasRef} className='rounded' />
-      </div>
-
-      <div className='mt-3 text-sm max-w-3xl text-center'>
-        {msg}
-        <div className='mt-2 text-xs opacity-80'>Controls: Arrow keys / WASD to move, G pick up, I inspect nearby, R restart. Descend stairs to go deeper. Permadeath is on.</div>
-      </div>
-
-      {gameOver && (
-        <div className='mt-3 p-3 bg-rose-900/80 rounded'>
-          <div className='font-bold text-lg'>You died</div>
-          <div>Depth reached: {depth}</div>
-          <div>Best depth: {bestDepth}</div>
-          <button onClick={()=>{ setSeed(Math.floor(Math.random()*1e9)); newRun(); setGameOver(false); }} className='mt-2 px-3 py-1 bg-slate-800 rounded'>Try Again</button>
-        </div>
-      )}
-
-    </div>
-  );
+    const lastRoom = state.rooms[state.rooms.length-1];
+    state.stairs = { x: lastRoom.x + Math.floor(lastRoom.w/2), y: lastRoom.y + Math.floor(lastRoom.h/2) };
+    // restore player stats
+    state.player.lvl = saved.lvl; state.player.xp = saved.xp; state.player.atk = saved.atk; state.player.def = saved.def; state.player.maxHp = saved.maxHp; state.player.hp = saved.hp;
+    state.depth++;
+    if (state.depth > bestDepth){ bestDepth = state.depth; localStorage.setItem('dd_best', String(bestDepth)); }
+    resizeCanvas(); draw(); updateUI();
+  }, 60);
 }
+
+function enemyTurn(){
+  // simple chase: enemies step toward player using Manhattan move
+  for (let i=0;i<state.enemies.length;i++){
+    const e = state.enemies[i];
+    const dx = state.player.x - e.x;
+    const dy = state.player.y - e.y;
+    const dist = Math.abs(dx) + Math.abs(dy);
+    if (dist <= 12){
+      // choose primary axis
+      let mov;
+      if (Math.abs(dx) > Math.abs(dy)) mov = [dx>0?1:-1, 0];
+      else mov = [0, dy>0?1:-1];
+      const nx = e.x + mov[0], ny = e.y + mov[1];
+      // attempt attack if player is there
+      if (nx === state.player.x && ny === state.player.y){
+        const dmg = Math.max(1, e.atk - state.player.def);
+        state.player.hp -= dmg;
+        pushMsg(`An enemy hits you for ${dmg}.`);
+        if (state.player.hp <= 0) playerDies();
+      } else {
+        // move if tile free (floor and no enemy there)
+        if (state.map[ny][nx] === '.' && !state.enemies.some(en => en.x===nx && en.y===ny) ){
+          e.x = nx; e.y = ny;
+        }
+      }
+    } else {
+      // small random wander
+      if (Math.random() < 0.06){
+        const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+        const r = dirs[Math.floor(Math.random()*4)];
+        const nx = e.x + r[0], ny = e.y + r[1];
+        if (state.map[ny][nx] === '.' && !state.enemies.some(en => en.x===nx && en.y===ny) ){
+          e.x = nx; e.y = ny;
+        }
+      }
+    }
+  }
+}
+
+function checkLevel(){
+  const needed = state.player.lvl * 6;
+  if (state.player.xp >= needed){
+    state.player.xp -= needed;
+    state.player.lvl++;
+    state.player.maxHp += 2;
+    state.player.atk += 1;
+    state.player.hp = state.player.maxHp;
+    pushMsg('You level up! Stats improved.');
+  }
+}
+
+function playerDies(){
+  pushMsg('You died...');
+  state.dead = true;
+  deadPanel.style.display = 'block';
+  deadInfo.innerText = `Depth reached: ${state.depth}   Best depth: ${bestDepth}`;
+}
+
+/* ----- Input ----- */
+window.addEventListener('keydown', (e)=>{
+  if (!state || state.dead) {
+    if (e.code === 'KeyR'){ restartRun(); }
+    return;
+  }
+  const mapKey = e.code;
+  if (['ArrowUp','KeyW'].includes(mapKey)) playerMove(0,-1);
+  if (['ArrowDown','KeyS'].includes(mapKey)) playerMove(0,1);
+  if (['ArrowLeft','KeyA'].includes(mapKey)) playerMove(-1,0);
+  if (['ArrowRight','KeyD'].includes(mapKey)) playerMove(1,0);
+  if (mapKey === 'KeyG') pickUpHere();
+  if (mapKey === 'KeyI'){
+    // inspect nearby items
+    const near = state.items.filter(it => Math.abs(it.x - state.player.x) + Math.abs(it.y - state.player.y) <= 3);
+    if (near.length === 0) pushMsg('No items nearby.');
+    else pushMsg('Nearby items: ' + near.map(it=>it.type).join(', '));
+  }
+  if (mapKey === 'KeyR'){ restartRun(); }
+});
+
+document.getElementById('newSeed').addEventListener('click', ()=>{
+  seed = Math.floor(Math.random()*1e9);
+  rng = mulberry32(seed);
+  newRun();
+});
+document.getElementById('restart').addEventListener('click', ()=>{ restartRun(); });
+document.getElementById('tryAgain').addEventListener('click', ()=>{ restartRun(); });
+
+function restartRun(){
+  seed = Math.floor(Math.random()*1e9);
+  state = null;
+  deadPanel.style.display = 'none';
+  newRun();
+}
+
+/* ----- Save map image ----- */
+document.getElementById('download').addEventListener('click', ()=>{
+  const link = document.createElement('a');
+  link.download = `dungeon-depth${state ? state.depth : 1}.png`;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+
+/* ----- Helpers on death / cleanup ----- */
+function dieCleanup(){
+  // nothing heavy now
+}
+
+/* ----- UI update ----- */
+function updateUI(){
+  if (!state) return;
+  depthLabel.innerText = `Depth: ${state.depth}`;
+  statsLabel.innerText = `HP: ${state.player.hp}/${state.player.maxHp} • ATK: ${state.player.atk} • DEF: ${state.player.def} • LVL:${state.player.lvl} XP:${state.player.xp}`;
+  messagesEl.innerText = state.messages.slice(-8).join('\\n');
+}
+
+/* ----- Game loop UI refresh (not animation heavy, turn-based) ----- */
+setInterval(()=>{
+  if (!state) return;
+  updateUI();
+  draw();
+}, 120);
+
+/* ----- Start ----- */
+newRun();
+window.addEventListener('resize', ()=>{ if (state) { resizeCanvas(); draw(); } });
+</script>
+
+</body>
+</html>
